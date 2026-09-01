@@ -7,11 +7,19 @@ import {
   Routes,
 } from "discord.js";
 
+import { testDatabaseConnection } from "./config/database";
 import { handleGuildMemberAdd } from "./events/guildMemberAdd";
 import { handleMessageCreate } from "./events/messageCreate";
 import { handleInteraction } from "./events/interactionCreate";
 import { runVpsLifecycleCheck } from "./services/vpsLifecycle";
 import { startPublicSshGatewayReconciler } from "./services/publicSshGatewayReconciler";
+import {
+  syncGuildInvites,
+  handleInviteCreate,
+  handleInviteDelete,
+  trackMemberJoin,
+  runReferralMigration,
+} from "./services/referralService";
 
 import { ticketCommand } from "./commands/ticket";
 import { pricingCommand } from "./commands/pricing";
@@ -21,6 +29,7 @@ import { modCommand } from "./commands/mod";
 import { minecraftCommand } from "./commands/minecraft";
 import { minecraftCreateCommand } from "./commands/minecraftCreate";
 import { vpsDeleteCommand } from "./commands/vpsDelete";
+import { invitesCommand } from "./commands/invites";
 
 function requireEnv(
   name: string
@@ -53,6 +62,7 @@ const client =
       GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildInvites,
     ],
   });
 
@@ -74,6 +84,7 @@ async function registerCommands(): Promise<void> {
         vpsCommand.toJSON(),
         vpsCreateCommand.toJSON(),
         vpsDeleteCommand.toJSON(),
+        invitesCommand.toJSON(),
         modCommand.toJSON(),
         minecraftCommand.toJSON(),
         minecraftCreateCommand.toJSON(),
@@ -97,6 +108,15 @@ client.once(
       `Connected to ${readyClient.guilds.cache.size} server(s).`
     );
 
+    // 1. Explicit Database Connection & Migration Startup Execution
+    try {
+      await testDatabaseConnection();
+      await runReferralMigration();
+    } catch (dbError) {
+      console.error("❌ Fatal Database Initialization Error:", dbError);
+      process.exit(1);
+    }
+
     try {
       await registerCommands();
     } catch (error) {
@@ -105,6 +125,9 @@ client.once(
         error
       );
     }
+
+    // Sync guild invite cache for referral tracking
+    await syncGuildInvites(readyClient);
 
     // Start Public SSH Gateway reconciler service
     startPublicSshGatewayReconciler();
@@ -120,11 +143,20 @@ client.once(
 client.on(
   "guildMemberAdd",
   async (member) => {
+    await trackMemberJoin(member);
     await handleGuildMemberAdd(
       member
     );
   }
 );
+
+client.on("inviteCreate", (invite) => {
+  void handleInviteCreate(invite);
+});
+
+client.on("inviteDelete", (invite) => {
+  void handleInviteDelete(invite);
+});
 
 client.on(
   "messageCreate",

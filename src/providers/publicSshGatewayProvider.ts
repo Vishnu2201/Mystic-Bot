@@ -243,17 +243,19 @@ export class PublicSshGatewayProvider {
 
   public async ensureMapping(
     publicPort: number,
-    targetHost: string,
+    targetHostInput: string,
     targetPort = 22
   ): Promise<boolean> {
     if (!this.enabled) return false;
+
+    const targetHost = targetHostInput ? targetHostInput.split("/")[0].trim() : "";
 
     if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535) {
       throw new Error(`Invalid public SSH port: ${publicPort}`);
     }
 
     if (!/^10\.0\.3\.\d+$/.test(targetHost)) {
-      throw new Error(`Invalid target IPv4 address for VPS: ${targetHost}`);
+      throw new Error(`Invalid target IPv4 address for VPS: ${targetHostInput}`);
     }
 
     await this.initChains();
@@ -383,10 +385,11 @@ export class PublicSshGatewayProvider {
   }
 
   public async verifyTargetConnectivity(
-    targetHost: string,
+    targetHostInput: string,
     targetPort = 22,
     timeoutMs = 2500
   ): Promise<GatewayVerificationResult> {
+    const targetHost = targetHostInput ? targetHostInput.split("/")[0].trim() : "";
     return new Promise((resolve) => {
       const socket = new net.Socket();
       let hasResolved = false;

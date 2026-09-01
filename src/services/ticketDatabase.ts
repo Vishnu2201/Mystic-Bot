@@ -1,3 +1,4 @@
+import { PoolClient } from "pg";
 import { pool } from "../config/database";
 
 export interface CustomerRecord {
@@ -24,9 +25,11 @@ export interface TicketRecord {
 export async function getOrCreateCustomer(
   discordUserId: string,
   username: string,
-  displayName: string
+  displayName: string,
+  client?: PoolClient
 ): Promise<CustomerRecord> {
-  const result = await pool.query<CustomerRecord>(
+  const runner = client ?? pool;
+  const result = await runner.query<CustomerRecord>(
     `
     INSERT INTO customers (
       discord_user_id,

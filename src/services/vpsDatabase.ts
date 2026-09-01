@@ -289,8 +289,10 @@ export async function allocateCustomerVpsSequence(
 }
 
 export async function createVpsInstance(
-  input: CreateVpsInstanceInput
+  input: CreateVpsInstanceInput,
+  client?: PoolClient
 ): Promise<VpsInstanceRecord> {
+  const runner = client ?? pool;
   const publicSshHost =
     input.publicSshHost?.trim() ||
     process.env.PUBLIC_SSH_HOST?.trim() ||
@@ -315,7 +317,7 @@ export async function createVpsInstance(
   const storageBackend = input.storageBackend || "directory";
   const storageStatus = input.storageStatus || "unbounded_directory";
 
-  const result = await pool.query<VpsInstanceRecord>(
+  const result = await runner.query<VpsInstanceRecord>(
     `
     INSERT INTO vps_instances (
       customer_id,

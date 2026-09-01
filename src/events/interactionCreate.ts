@@ -99,6 +99,15 @@ import {
 import { getGatewayDiagnostics } from "../services/publicSshGatewayReconciler";
 
 import {
+  getUserReferralStats,
+  claimReferralReward,
+  getReferralLeaderboard,
+  getAdminUserReferralBreakdown,
+  evaluateReferralQualification,
+  getReferralRewardThreshold,
+} from "../services/referralService";
+
+import {
   getModerationUserState,
   getRecentModerationEvents,
   setModerationWhitelist,
@@ -396,8 +405,212 @@ async function handleSlashCommand(
     return;
   }
 
+  if (interaction.commandName === "invites") {
+    await handleInvitesCommand(interaction, isStaff);
+    return;
+  }
+
   if (interaction.commandName === "mod") {
     await handleModCommand(interaction, isStaff);
+    return;
+  }
+}
+
+// ============================================================
+// Referral Invites Command
+// ============================================================
+
+async function handleInvitesCommand(
+  interaction: ChatInputCommandInteraction,
+  isStaff: boolean
+): Promise<void> {
+  if (!interaction.guildId) {
+    await interaction.reply({
+      content: "❌ This command can only be used inside a server.",
+      flags: 64,
+    });
+    return;
+  }
+
+  const subcommand = interaction.options.getSubcommand(false) || "status";
+
+  if (subcommand === "status") {
+    const stats = await getUserReferralStats(interaction.guildId, interaction.user.id);
+    const threshold = stats.threshold;
+    const progress = stats.progressCurrent;
+
+    const totalBlocks = 10;
+    const filledBlocks = Math.round((progress / threshold) * totalBlocks);
+    const progressBar = "█".repeat(filledBlocks) + "░".repeat(totalBlocks - filledBlocks);
+
+    const needed = threshold - progress;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle("🎟️ Mystic Servers Referrals")
+      .setDescription(
+        `👥 **Successful VPS Referrals:** ${stats.totalQualified}\n` +
+        `🎁 **Rewards Available:** ${stats.rewardsAvailable}\n\n` +
+        `**Progress:**\n` +
+        `\`${progressBar}\` ${progress}/${threshold}\n\n` +
+        (stats.rewardsAvailable > 0
+          ? `🎉 **You have ${stats.rewardsAvailable} free VPS reward(s) available!** Use \`/invites claim\` to claim now.`
+          : `Invite **${needed}** more customer${needed === 1 ? "" : "s"} to earn a free VPS!`)
+      )
+      .addFields(
+        { name: "🔗 Total Discord Joins Attributed", value: `${stats.totalAttributed}`, inline: true },
+        { name: "✅ Qualified VPS Customers", value: `${stats.totalQualified}`, inline: true },
+        { name: "🔄 Unconsumed Referral Credits", value: `${stats.unconsumedQualified}`, inline: true },
+        { name: "🎁 Total Rewards Earned", value: `${stats.rewardsEarned}`, inline: true },
+        { name: "📦 Rewards Claimed", value: `${stats.rewardsClaimed}`, inline: true },
+        { name: "⭐ Rewards Currently Available", value: `${stats.rewardsAvailable}`, inline: true }
+      )
+      .setFooter({ text: "MysticServers • Share your Discord invite to earn rewards!" })
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed] });
+    return;
+  }
+
+  if (subcommand === "claim") {
+    await interaction.deferReply({ flags: 64 });
+    try {
+      const result = await claimReferralReward(
+        interaction.guildId,
+        interaction.user.id,
+        interaction.user.username,
+        interaction.user.displayName,
+        interaction.client
+      );
+
+      const vpsNumberFormatted = String(result.vps.vpsNumber).padStart(6, "0");
+      const pubHost = result.vps.publicSshHost || "ssh.mysticservers.com";
+      const pubPort = result.vps.publicSshPort;
+      const pubSshCmd = pubPort ? `ssh -p ${pubPort} root@${pubHost}` : "N/A";
+
+      const claimEmbed = new EmbedBuilder()
+        .setColor(0x57f287)
+        .setTitle("🎉 Free VPS Reward Claimed!")
+        .setDescription(
+          `Hello <@${interaction.user.id}>! 👋\n\n` +
+          `Your free VPS **#${vpsNumberFormatted}** (\`${result.vps.instanceName}\`) has been successfully provisioned through the MysticServers referral program.`
+        )
+        .addFields(
+          { name: "🖥️ VPS Number", value: `#${vpsNumberFormatted}`, inline: true },
+          { name: "🏷️ Instance Name", value: result.vps.instanceName ?? "N/A", inline: true },
+          { name: "📦 Plan", value: result.vps.planName, inline: true },
+          { name: "🧠 RAM", value: `${result.vps.ramGb} GB`, inline: true },
+          { name: "⚡ vCore", value: `${result.vps.vcpu}`, inline: true },
+          { name: "💾 Disk", value: `${result.vps.storageGb} GB`, inline: true },
+          { name: "🔒 Private IPv4", value: result.vps.privateIpv4 ?? "Not assigned", inline: true },
+          { name: "🌐 Public SSH Gateway", value: `\`${pubHost}:${pubPort ?? "N/A"}\``, inline: true },
+          { name: "🔌 SSH Command", value: `\`${pubSshCmd}\``, inline: false },
+          { name: "🧾 Billing Source", value: "🎁 Free Referral Reward", inline: true }
+        )
+        .setFooter({ text: "MysticServers • Credentials sent by Direct Message!" })
+        .setTimestamp();
+
+      // Send credentials securely to customer via DM
+      try {
+        const dmEmbed = new EmbedBuilder()
+          .setColor(0x57f287)
+          .setTitle("🎉 Your Free Reward VPS Details")
+          .setDescription(`Your free VPS **#${vpsNumberFormatted}** credentials:`)
+          .addFields(
+            { name: "🖥️ VPS Number", value: `#${vpsNumberFormatted}`, inline: true },
+            { name: "🔑 SSH Root Password", value: `\`${result.credentialPassword}\``, inline: false },
+            { name: "🌐 Public SSH Command", value: `\`${pubSshCmd}\``, inline: false }
+          )
+          .setTimestamp();
+
+        await interaction.user.send({ embeds: [dmEmbed] });
+      } catch (dmErr) {
+        console.error("❌ Failed to send reward VPS DM credentials:", dmErr);
+      }
+
+      await interaction.editReply({ embeds: [claimEmbed] });
+    } catch (err: any) {
+      await interaction.editReply({
+        content: err.message || "❌ Failed to claim free VPS reward. Please try again later.",
+      });
+    }
+    return;
+  }
+
+  if (subcommand === "leaderboard") {
+    const leaderboard = await getReferralLeaderboard(interaction.guildId);
+
+    if (leaderboard.length === 0) {
+      await interaction.reply({
+        content: "🏆 **Mystic Servers Referral Leaderboard**\n\nNo qualifying VPS referrals recorded yet.",
+      });
+      return;
+    }
+
+    const threshold = getReferralRewardThreshold();
+    const medals = ["🥇", "🥈", "🥉"];
+
+    const lines = leaderboard.map((entry, index) => {
+      const medal = medals[index] || `**#${index + 1}**`;
+      return `${medal} <@${entry.inviterDiscordUserId}> — **${entry.qualifiedCount}** successful referral${entry.qualifiedCount === 1 ? "" : "s"}`;
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(0xf1c40f)
+      .setTitle("🏆 Mystic Servers Referral Leaderboard")
+      .setDescription(
+        lines.join("\n") +
+        `\n\n🎁 **${threshold} successful referrals = 1 free VPS**`
+      )
+      .setFooter({ text: "Qualifying referrals require invited members to become real VPS customers." })
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed] });
+    return;
+  }
+
+  if (subcommand === "admin") {
+    if (!isStaff) {
+      await interaction.reply({
+        content: "❌ This subcommand is only available to MysticServers Staff.",
+        flags: 64,
+      });
+      return;
+    }
+
+    const targetUser = interaction.options.getUser("user", true);
+    await interaction.deferReply({ flags: 64 });
+
+    try {
+      const breakdown = await getAdminUserReferralBreakdown(interaction.guildId, targetUser.id);
+      const s = breakdown.stats;
+
+      let recentText = breakdown.recentReferrals.length === 0
+        ? "No attributed referral joins found."
+        : breakdown.recentReferrals.slice(0, 10).map((r) => {
+            const statusEmoji = r.status === "qualified" ? "✅" : r.status === "disqualified" ? "❌" : "⏳";
+            const dateStr = new Date(r.joinedAt).toLocaleDateString("en-IN");
+            return `${statusEmoji} <@${r.referredUserId}> (\`${r.referredUserId}\`) — Status: \`${r.status}\`${r.reason ? ` (${r.reason})` : ""} [${dateStr}]`;
+          }).join("\n");
+
+      const adminEmbed = new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle(`🩺 Referral Diagnostics for ${targetUser.tag}`)
+        .setDescription(
+          `👤 **User:** ${targetUser} (\`${targetUser.id}\`)\n` +
+          `📊 **Attributed Joins:** ${s.totalAttributed}\n` +
+          `✅ **Qualified Referrals:** ${s.totalQualified}\n` +
+          `🔄 **Unconsumed Credits:** ${s.unconsumedQualified}\n` +
+          `🎁 **Rewards Earned / Claimed / Available:** ${s.rewardsEarned} / ${s.rewardsClaimed} / ${s.rewardsAvailable}\n\n` +
+          `**Recent Referred Joins (Top 10):**\n${recentText}`
+        )
+        .setFooter({ text: "MysticServers Staff Referral Inspection" })
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [adminEmbed] });
+    } catch (adminErr: any) {
+      await interaction.editReply({ content: `❌ Staff referral diagnostic failed: ${adminErr.message}` });
+    }
     return;
   }
 }
@@ -1944,6 +2157,9 @@ async function handleAutomaticVpsModal(
 
     // Core VPS provisioning succeeded. Disarm rollback.
     createdVpsId = undefined;
+
+    // Evaluate referral qualification for customer
+    void evaluateReferralQualification(ticket.customerId, provisionedVps.id, interaction.guildId ?? undefined);
   } catch (error) {
     console.error("Automatic VPS provisioning failed", error);
 
@@ -2421,6 +2637,9 @@ async function handleVpsAccessModal(
         dmSent,
       }
     );
+
+    // Evaluate referral qualification for customer
+    void evaluateReferralQualification(ticket.customerId, vps.id, interaction.guildId ?? undefined);
 
     const channel =
       interaction.channel?.type === ChannelType.GuildText
