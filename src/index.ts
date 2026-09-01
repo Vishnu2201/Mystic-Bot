@@ -30,6 +30,8 @@ import { minecraftCommand } from "./commands/minecraft";
 import { minecraftCreateCommand } from "./commands/minecraftCreate";
 import { vpsDeleteCommand } from "./commands/vpsDelete";
 import { invitesCommand } from "./commands/invites";
+import { adminPricingCommand } from "./commands/adminPricing";
+import { runCatalogMigration } from "./services/pricingService";
 
 function requireEnv(
   name: string
@@ -85,6 +87,7 @@ async function registerCommands(): Promise<void> {
         vpsCreateCommand.toJSON(),
         vpsDeleteCommand.toJSON(),
         invitesCommand.toJSON(),
+        adminPricingCommand.toJSON(),
         modCommand.toJSON(),
         minecraftCommand.toJSON(),
         minecraftCreateCommand.toJSON(),
@@ -111,6 +114,7 @@ client.once(
     // 1. Explicit Database Connection & Migration Startup Execution
     try {
       await testDatabaseConnection();
+      await runCatalogMigration();
       await runReferralMigration();
     } catch (dbError) {
       console.error("❌ Fatal Database Initialization Error:", dbError);

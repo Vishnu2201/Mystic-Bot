@@ -38,7 +38,7 @@ export async function provisionMinecraftServer(
   const pteroProvider = new PterodactylProvider();
 
   // 1. Fetch & validate plan
-  const plan = getMinecraftPlanById(request.planId);
+  const plan = await getMinecraftPlanById(request.planId);
   if (!plan) {
     throw new Error(`Invalid Minecraft hosting plan: "${request.planId}".`);
   }

@@ -108,6 +108,26 @@ import {
 } from "../services/referralService";
 
 import {
+  renderAdminPricingMainDashboard,
+  checkAdminAuth,
+  renderCategoryDashboard,
+  renderPlanSelectMenu,
+  buildPlanModal,
+  renderBillingAdminDashboard,
+  renderAuditHistoryDashboard,
+} from "../handlers/pricingAdminHandler";
+
+import {
+  createCatalogPlan,
+  updateCatalogPlan,
+  togglePlanActive,
+  archivePlan,
+  getBillingOptions,
+  updateBillingOption,
+  refreshPricingChannel,
+} from "../services/pricingService";
+
+import {
   getModerationUserState,
   getRecentModerationEvents,
   setModerationWhitelist,
@@ -142,6 +162,18 @@ export async function handleInteraction(
         interaction
       );
 
+      return;
+    }
+
+    // --------------------------------------------------------
+    // Admin Pricing Interactions
+    // --------------------------------------------------------
+
+    if (
+      (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
+      interaction.customId.startsWith("admin_pricing:")
+    ) {
+      await handleAdminPricingInteraction(interaction);
       return;
     }
 
@@ -410,9 +442,289 @@ async function handleSlashCommand(
     return;
   }
 
+  if (interaction.commandName === "admin-pricing") {
+    await handleAdminPricingCommand(interaction, isStaff);
+    return;
+  }
+
   if (interaction.commandName === "mod") {
     await handleModCommand(interaction, isStaff);
     return;
+  }
+}
+
+// ============================================================
+// Admin Pricing System Commands & Interactions
+// ============================================================
+
+async function handleAdminPricingCommand(
+  interaction: ChatInputCommandInteraction,
+  isStaff: boolean
+): Promise<void> {
+  if (!isStaff) {
+    await interaction.reply({
+      content: "❌ Only MysticServers Administrators can manage pricing.",
+      flags: 64,
+    });
+    return;
+  }
+
+  const dashboard = await renderAdminPricingMainDashboard();
+  await interaction.reply({ ...dashboard, flags: 64 });
+}
+
+async function handleAdminPricingInteraction(interaction: Interaction): Promise<void> {
+  if (!checkAdminAuth(interaction)) {
+    if (interaction.isRepliable()) {
+      await interaction.reply({ content: "❌ Permission Denied: Admin authorization required.", flags: 64 }).catch(() => {});
+    }
+    return;
+  }
+
+  // 1. Button Interactions
+  if (interaction.isButton() && interaction.customId.startsWith("admin_pricing:")) {
+    const id = interaction.customId;
+
+    if (id === "admin_pricing:main") {
+      const db = await renderAdminPricingMainDashboard();
+      await interaction.update({ embeds: db.embeds, components: db.components });
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:category:")) {
+      const category = id.split(":")[2] as "vps" | "minecraft" | "ipv4" | "billing" | "history";
+      if (category === "vps" || category === "minecraft") {
+        const db = await renderCategoryDashboard(category);
+        await interaction.update({ embeds: db.embeds, components: db.components });
+        return;
+      }
+      if (category === "billing") {
+        const db = await renderBillingAdminDashboard();
+        await interaction.update({ embeds: db.embeds, components: db.components });
+        return;
+      }
+      if (category === "history") {
+        const db = await renderAuditHistoryDashboard();
+        await interaction.update({ embeds: db.embeds, components: db.components });
+        return;
+      }
+    }
+
+    if (id.startsWith("admin_pricing:plan:add:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const modal = buildPlanModal(category);
+      await interaction.showModal(modal);
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:plan:edit_select:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const res = await renderPlanSelectMenu(category, "edit");
+      await interaction.reply(res);
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:plan:toggle_select:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const res = await renderPlanSelectMenu(category, "toggle");
+      await interaction.reply(res);
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:plan:archive_select:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const res = await renderPlanSelectMenu(category, "archive");
+      await interaction.reply(res);
+      return;
+    }
+  }
+
+  // 2. Select Menu Executions
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith("admin_pricing:")) {
+    const id = interaction.customId;
+
+    if (id.startsWith("admin_pricing:select_exec:")) {
+      const action = id.split(":")[2] as "edit" | "toggle" | "archive";
+      const selectedValue = interaction.values[0];
+      const targetPlanId = selectedValue.split(":")[3];
+
+      if (action === "edit") {
+        const plan = await getPricingPlanById(targetPlanId);
+        if (!plan) {
+          await interaction.reply({ content: "❌ Plan not found.", flags: 64 });
+          return;
+        }
+        const modal = buildPlanModal(plan.category, plan);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (action === "toggle") {
+        await interaction.deferUpdate();
+        const updated = await togglePlanActive(targetPlanId, interaction.user.id);
+        await refreshPricingChannel(interaction.client);
+        await interaction.followUp({ content: `✅ Plan **${updated.name}** is now **${updated.isActive ? "ACTIVE" : "DISABLED"}**.`, flags: 64 });
+        return;
+      }
+
+      if (action === "archive") {
+        await interaction.deferUpdate();
+        const archived = await archivePlan(targetPlanId, interaction.user.id);
+        await refreshPricingChannel(interaction.client);
+        await interaction.followUp({ content: `📂 Plan **${archived.name}** has been **ARCHIVED**.`, flags: 64 });
+        return;
+      }
+    }
+
+    if (id === "admin_pricing:billing_select") {
+      const selectedId = interaction.values[0].replace("admin_pricing:billing_edit_select:", "");
+      const options = await getBillingOptions("vps", true);
+      const mcOptions = await getBillingOptions("minecraft", true);
+      const opt = [...options, ...mcOptions].find((b) => b.id === selectedId);
+
+      if (!opt) {
+        await interaction.reply({ content: "❌ Billing option not found.", flags: 64 });
+        return;
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId(`admin_pricing:modal:billing_edit:${opt.id}`)
+        .setTitle(`Edit ${opt.category.toUpperCase()} ${opt.months}M Discount`);
+
+      const input = new TextInputBuilder()
+        .setCustomId("discount_percent")
+        .setLabel("Discount Percentage (0 to 100)")
+        .setStyle(TextInputStyle.Short)
+        .setValue(String(opt.discountPercent))
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+      await interaction.showModal(modal);
+      return;
+    }
+  }
+
+  // 3. Modal Submissions
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("admin_pricing:modal:")) {
+    const id = interaction.customId;
+
+    if (id.startsWith("admin_pricing:modal:add:")) {
+      await interaction.deferReply({ flags: 64 });
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const name = interaction.fields.getTextInputValue("plan_name").trim();
+      const priceInr = parseFloat(interaction.fields.getTextInputValue("price_inr"));
+      const priceUsd = parseFloat(interaction.fields.getTextInputValue("price_usd"));
+      const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
+
+      if (!name || isNaN(priceInr) || isNaN(priceUsd) || priceInr < 0 || priceUsd < 0) {
+        await interaction.editReply({ content: "❌ Invalid input. Name is required and prices must be non-negative numbers." });
+        return;
+      }
+
+      let ramGb = 1;
+      let vcpu = 1;
+      let storageGb = 10;
+      let memoryMb = 1024;
+      let cpuPercent = 100;
+
+      if (category === "vps") {
+        const specs = interaction.fields.getTextInputValue("vps_specs").split(",").map((s) => parseInt(s.trim(), 10));
+        if (specs.length < 3 || specs.some(isNaN) || specs.some((n) => n <= 0)) {
+          await interaction.editReply({ content: "❌ Invalid VPS specs. Must provide RAM GB, vCPU, and Storage GB as positive numbers." });
+          return;
+        }
+        [ramGb, vcpu, storageGb] = specs;
+        memoryMb = ramGb * 1024;
+        cpuPercent = vcpu * 100;
+      } else {
+        const specs = interaction.fields.getTextInputValue("mc_specs").split(",").map((s) => parseInt(s.trim(), 10));
+        if (specs.length < 3 || specs.some(isNaN) || specs.some((n) => n <= 0)) {
+          await interaction.editReply({ content: "❌ Invalid Minecraft specs. Must provide RAM MB, CPU %, and Storage GB as positive numbers." });
+          return;
+        }
+        [memoryMb, cpuPercent, storageGb] = specs;
+        ramGb = Math.ceil(memoryMb / 1024);
+        vcpu = Math.ceil(cpuPercent / 100);
+      }
+
+      const created = await createCatalogPlan(
+        { category, name, description, ramGb, vcpu, storageGb, memoryMb, cpuPercent, priceInr, priceUsd },
+        interaction.user.id
+      );
+
+      await refreshPricingChannel(interaction.client);
+      await interaction.editReply({ content: `✅ Created new **${category.toUpperCase()}** plan **${created.name}** (₹${created.priceInr} / $${created.priceUsd}).` });
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:modal:edit:")) {
+      await interaction.deferReply({ flags: 64 });
+      const planId = id.replace("admin_pricing:modal:edit:", "");
+      const existing = await getPricingPlanById(planId);
+
+      if (!existing) {
+        await interaction.editReply({ content: "❌ Target plan not found." });
+        return;
+      }
+
+      const name = interaction.fields.getTextInputValue("plan_name").trim();
+      const priceInr = parseFloat(interaction.fields.getTextInputValue("price_inr"));
+      const priceUsd = parseFloat(interaction.fields.getTextInputValue("price_usd"));
+      const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
+
+      if (!name || isNaN(priceInr) || isNaN(priceUsd) || priceInr < 0 || priceUsd < 0) {
+        await interaction.editReply({ content: "❌ Invalid input numbers." });
+        return;
+      }
+
+      let ramGb = existing.ramGb;
+      let vcpu = existing.vcpu;
+      let storageGb = existing.storageGb;
+      let memoryMb = existing.memoryMb;
+      let cpuPercent = existing.cpuPercent;
+
+      if (existing.category === "vps") {
+        const specs = interaction.fields.getTextInputValue("vps_specs").split(",").map((s) => parseInt(s.trim(), 10));
+        if (specs.length === 3 && !specs.some(isNaN)) {
+          [ramGb, vcpu, storageGb] = specs;
+          memoryMb = ramGb * 1024;
+          cpuPercent = vcpu * 100;
+        }
+      } else {
+        const specs = interaction.fields.getTextInputValue("mc_specs").split(",").map((s) => parseInt(s.trim(), 10));
+        if (specs.length === 3 && !specs.some(isNaN)) {
+          [memoryMb, cpuPercent, storageGb] = specs;
+          ramGb = Math.ceil((memoryMb || 1024) / 1024);
+          vcpu = Math.ceil((cpuPercent || 100) / 100);
+        }
+      }
+
+      const updated = await updateCatalogPlan(
+        planId,
+        { name, description, ramGb, vcpu, storageGb, memoryMb: memoryMb ?? undefined, cpuPercent: cpuPercent ?? undefined, priceInr, priceUsd },
+        interaction.user.id
+      );
+
+      await refreshPricingChannel(interaction.client);
+      await interaction.editReply({ content: `✅ Updated plan **${updated.name}** successfully.` });
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:modal:billing_edit:")) {
+      await interaction.deferReply({ flags: 64 });
+      const optionId = id.replace("admin_pricing:modal:billing_edit:", "");
+      const val = parseFloat(interaction.fields.getTextInputValue("discount_percent"));
+
+      if (isNaN(val) || val < 0 || val > 100) {
+        await interaction.editReply({ content: "❌ Discount percentage must be between 0 and 100." });
+        return;
+      }
+
+      const updated = await updateBillingOption(optionId, val, interaction.user.id);
+      await refreshPricingChannel(interaction.client);
+      await interaction.editReply({ content: `✅ Updated **${updated.category.toUpperCase()} ${updated.months}M** discount to **${updated.discountPercent}%**.` });
+      return;
+    }
   }
 }
 
@@ -4172,7 +4484,7 @@ async function handleMinecraftButton(interaction: ButtonInteraction): Promise<vo
     const planId = parts[2];
     const billingMonths = parseInt(parts[3], 10) || 1;
 
-    const plan = getMinecraftPlanById(planId);
+    const plan = await getMinecraftPlanById(planId);
 
     if (!plan) {
       await interaction.reply({ content: "❌ Selected Minecraft plan no longer exists.", flags: 64 });
@@ -4268,7 +4580,7 @@ async function handleMinecraftProvisionTicketButton(interaction: ButtonInteracti
     return;
   }
 
-  const plan = getMinecraftPlanById(planId);
+  const plan = await getMinecraftPlanById(planId);
   if (!plan) {
     await interaction.reply({ content: `❌ Minecraft plan "${planId}" attached to ticket is invalid.`, flags: 64 });
     return;

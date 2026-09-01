@@ -29,7 +29,7 @@ export const minecraftCommand = new SlashCommandBuilder()
   );
 
 export async function createMinecraftPricingPanel() {
-  const plans = getMinecraftPlans();
+  const plans = await getMinecraftPlans();
 
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
@@ -82,7 +82,7 @@ export async function createMinecraftPricingPanel() {
 }
 
 export async function createMinecraftPlanDetails(planId: string, billingMonths: number = 1) {
-  const plan = getMinecraftPlanById(planId);
+  const plan = await getMinecraftPlanById(planId);
   if (!plan) {
     throw new Error("Minecraft plan no longer exists.");
   }
