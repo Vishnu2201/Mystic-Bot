@@ -116,6 +116,9 @@ import {
   renderBillingAdminDashboard,
   renderAuditHistoryDashboard,
   renderAdminDisplaySettingsDashboard,
+  renderAdminNodesDashboard,
+  renderNodeSelectMenu,
+  buildNodeModal,
 } from "../handlers/pricingAdminHandler";
 
 import {
@@ -130,6 +133,11 @@ import {
   updateDisplaySettings,
   renderVpsPricingPanel,
   renderMinecraftPricingPanel,
+  getHostingNodeById,
+  createHostingNode,
+  updateHostingNode,
+  toggleHostingNodeActive,
+  archiveHostingNode,
 } from "../services/pricingService";
 
 import {
@@ -179,6 +187,28 @@ export async function handleInteraction(
       interaction.customId.startsWith("admin_pricing:")
     ) {
       await handleAdminPricingInteraction(interaction);
+      return;
+    }
+
+    // --------------------------------------------------------
+    // Customer Node Selectors (Single Source of Truth)
+    // --------------------------------------------------------
+
+    if (interaction.isStringSelectMenu() && interaction.customId === "pricing:node:select") {
+      await interaction.deferUpdate();
+      const selectedValue = interaction.values[0];
+      const selectedNodeId = selectedValue.startsWith("pricing:node:select:") ? selectedValue.replace("pricing:node:select:", "") : selectedValue;
+      const panel = await renderVpsPricingPanel(selectedNodeId);
+      await interaction.editReply({ embeds: panel.embeds, components: panel.components });
+      return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === "minecraft:node:select") {
+      await interaction.deferUpdate();
+      const selectedValue = interaction.values[0];
+      const selectedNodeId = selectedValue.startsWith("minecraft:node:select:") ? selectedValue.replace("minecraft:node:select:", "") : selectedValue;
+      const panel = await renderMinecraftPricingPanel(selectedNodeId);
+      await interaction.editReply({ embeds: panel.embeds, components: panel.components });
       return;
     }
 
@@ -479,362 +509,502 @@ async function handleAdminPricingCommand(
 }
 
 async function handleAdminPricingInteraction(interaction: Interaction): Promise<void> {
-  if (!checkAdminAuth(interaction)) {
-    if (interaction.isRepliable()) {
-      await interaction.reply({ content: "❌ Permission Denied: Admin authorization required.", flags: 64 }).catch(() => {});
-    }
-    return;
-  }
-
-  // 1. Button Interactions
-  if (interaction.isButton() && interaction.customId.startsWith("admin_pricing:")) {
-    const id = interaction.customId;
-
-    if (id === "admin_pricing:main") {
-      const db = await renderAdminPricingMainDashboard();
-      await interaction.update({ embeds: db.embeds, components: db.components });
+  try {
+    if (!checkAdminAuth(interaction)) {
+      if (interaction.isRepliable()) {
+        await interaction.reply({ content: "❌ Permission Denied: Admin authorization required.", flags: 64 }).catch(() => {});
+      }
       return;
     }
 
-    if (id === "admin_pricing:category:display_select") {
-      const embed = new EmbedBuilder()
-        .setColor(0xf1c40f)
-        .setTitle("📝 Select Product Presentation Category")
-        .setDescription("Choose which product category presentation text you want to manage or preview:");
+    // 1. Button Interactions
+    if (interaction.isButton() && interaction.customId.startsWith("admin_pricing:")) {
+      const id = interaction.customId;
 
-      const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId("admin_pricing:display:category:vps").setLabel("VPS Display").setEmoji("🖥️").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("admin_pricing:display:category:minecraft").setLabel("Minecraft Display").setEmoji("🎮").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("admin_pricing:main").setLabel("Back").setStyle(ButtonStyle.Secondary)
-      );
-
-      await interaction.update({ embeds: [embed], components: [buttons] });
-      return;
-    }
-
-    if (id.startsWith("admin_pricing:display:category:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const db = await renderAdminDisplaySettingsDashboard(category);
-      await interaction.update({ embeds: db.embeds, components: db.components });
-      return;
-    }
-
-    if (id.startsWith("admin_pricing:display:edit_text:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const settings = await getDisplaySettings(category);
-
-      const modal = new ModalBuilder()
-        .setCustomId(`admin_pricing:modal:display_text:${category}`)
-        .setTitle(`Edit ${category.toUpperCase()} Text & Titles`);
-
-      const titleInput = new TextInputBuilder().setCustomId("title").setLabel("Public Title").setStyle(TextInputStyle.Short).setValue(settings.title).setRequired(true);
-      const subtitleInput = new TextInputBuilder().setCustomId("subtitle").setLabel("Subtitle").setStyle(TextInputStyle.Short).setValue(settings.subtitle ?? "").setRequired(false);
-      const descInput = new TextInputBuilder().setCustomId("description").setLabel("Description").setStyle(TextInputStyle.Paragraph).setValue(settings.description ?? "").setRequired(false);
-      const footerInput = new TextInputBuilder().setCustomId("footer").setLabel("Footer Text").setStyle(TextInputStyle.Short).setValue(settings.footer ?? "").setRequired(false);
-
-      modal.addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(titleInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(subtitleInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(descInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(footerInput)
-      );
-
-      await interaction.showModal(modal);
-      return;
-    }
-
-
-
-    if (id.startsWith("admin_pricing:display:edit_features:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const settings = await getDisplaySettings(category);
-
-      const modal = new ModalBuilder()
-        .setCustomId(`admin_pricing:modal:display_features:${category}`)
-        .setTitle(`Edit ${category.toUpperCase()} Feature List`);
-
-      const featInput = new TextInputBuilder()
-        .setCustomId("features")
-        .setLabel("Included Features (One per line)")
-        .setStyle(TextInputStyle.Paragraph)
-        .setValue(settings.features.join("\n"))
-        .setRequired(true);
-
-      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(featInput));
-      await interaction.showModal(modal);
-      return;
-    }
-
-    if (id.startsWith("admin_pricing:display:preview:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      await interaction.deferReply({ flags: 64 });
-
-      const panel = category === "vps" ? await renderVpsPricingPanel("India") : await renderMinecraftPricingPanel();
-      await interaction.editReply({ embeds: panel.embeds, components: panel.components });
-      return;
-    }
-
-    if (id.startsWith("admin_pricing:category:")) {
-      const category = id.split(":")[2] as "vps" | "minecraft" | "ipv4" | "billing" | "history";
-      if (category === "vps" || category === "minecraft") {
-        const db = await renderCategoryDashboard(category);
-        await interaction.update({ embeds: db.embeds, components: db.components });
+      if (id === "admin_pricing:main") {
+        await interaction.deferUpdate();
+        const db = await renderAdminPricingMainDashboard();
+        await interaction.editReply({ embeds: db.embeds, components: db.components });
         return;
       }
-      if (category === "billing") {
-        const db = await renderBillingAdminDashboard();
-        await interaction.update({ embeds: db.embeds, components: db.components });
+
+      if (id === "admin_pricing:category:display_select") {
+        await interaction.deferUpdate();
+        const embed = new EmbedBuilder()
+          .setColor(0xf1c40f)
+          .setTitle("📝 Select Product Presentation Category")
+          .setDescription("Choose which product category presentation text you want to manage or preview:");
+
+        const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId("admin_pricing:display:category:vps").setLabel("VPS Display").setEmoji("🖥️").setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId("admin_pricing:display:category:minecraft").setLabel("Minecraft Display").setEmoji("🎮").setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId("admin_pricing:main").setLabel("Back").setStyle(ButtonStyle.Secondary)
+        );
+
+        await interaction.editReply({ embeds: [embed], components: [buttons] });
         return;
       }
-      if (category === "history") {
-        const db = await renderAuditHistoryDashboard();
-        await interaction.update({ embeds: db.embeds, components: db.components });
+
+      if (id.startsWith("admin_pricing:display:category:")) {
+        await interaction.deferUpdate();
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        const db = await renderAdminDisplaySettingsDashboard(category);
+        await interaction.editReply({ embeds: db.embeds, components: db.components });
         return;
       }
-    }
 
-    if (id.startsWith("admin_pricing:plan:add:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const modal = buildPlanModal(category);
-      await interaction.showModal(modal);
-      return;
-    }
+      if (id.startsWith("admin_pricing:display:edit_text:")) {
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        const settings = await getDisplaySettings(category);
 
-    if (id.startsWith("admin_pricing:plan:edit_select:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const res = await renderPlanSelectMenu(category, "edit");
-      await interaction.reply(res);
-      return;
-    }
+        const modal = new ModalBuilder()
+          .setCustomId(`admin_pricing:modal:display_text:${category}`)
+          .setTitle(`Edit ${category.toUpperCase()} Text & Titles`);
 
-    if (id.startsWith("admin_pricing:plan:toggle_select:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const res = await renderPlanSelectMenu(category, "toggle");
-      await interaction.reply(res);
-      return;
-    }
+        const titleInput = new TextInputBuilder().setCustomId("title").setLabel("Public Title").setStyle(TextInputStyle.Short).setValue(settings.title).setRequired(true);
+        const subtitleInput = new TextInputBuilder().setCustomId("subtitle").setLabel("Subtitle").setStyle(TextInputStyle.Short).setValue(settings.subtitle ?? "").setRequired(false);
+        const descInput = new TextInputBuilder().setCustomId("description").setLabel("Description").setStyle(TextInputStyle.Paragraph).setValue(settings.description ?? "").setRequired(false);
+        const footerInput = new TextInputBuilder().setCustomId("footer").setLabel("Footer Text").setStyle(TextInputStyle.Short).setValue(settings.footer ?? "").setRequired(false);
 
-    if (id.startsWith("admin_pricing:plan:archive_select:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const res = await renderPlanSelectMenu(category, "archive");
-      await interaction.reply(res);
-      return;
-    }
-  }
+        modal.addComponents(
+          new ActionRowBuilder<TextInputBuilder>().addComponents(titleInput),
+          new ActionRowBuilder<TextInputBuilder>().addComponents(subtitleInput),
+          new ActionRowBuilder<TextInputBuilder>().addComponents(descInput),
+          new ActionRowBuilder<TextInputBuilder>().addComponents(footerInput)
+        );
 
-  // 2. Select Menu Executions
-  if (interaction.isStringSelectMenu() && interaction.customId.startsWith("admin_pricing:")) {
-    const id = interaction.customId;
-
-    if (id.startsWith("admin_pricing:select_exec:")) {
-      const action = id.split(":")[2] as "edit" | "toggle" | "archive";
-      const selectedValue = interaction.values[0];
-      const targetPlanId = selectedValue.split(":")[3];
-
-      if (action === "edit") {
-        const plan = await getPricingPlanById(targetPlanId);
-        if (!plan) {
-          await interaction.reply({ content: "❌ Plan not found.", flags: 64 });
-          return;
-        }
-        const modal = buildPlanModal(plan.category, plan);
         await interaction.showModal(modal);
         return;
       }
 
-      if (action === "toggle") {
+      if (id.startsWith("admin_pricing:display:edit_features:")) {
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        const settings = await getDisplaySettings(category);
+
+        const modal = new ModalBuilder()
+          .setCustomId(`admin_pricing:modal:display_features:${category}`)
+          .setTitle(`Edit ${category.toUpperCase()} Feature List`);
+
+        const featInput = new TextInputBuilder()
+          .setCustomId("features")
+          .setLabel("Included Features (One per line)")
+          .setStyle(TextInputStyle.Paragraph)
+          .setValue(settings.features.join("\n"))
+          .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(featInput));
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (id.startsWith("admin_pricing:display:preview:")) {
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        await interaction.deferReply({ flags: 64 });
+
+        const panel = category === "vps" ? await renderVpsPricingPanel() : await renderMinecraftPricingPanel();
+        await interaction.editReply({ embeds: panel.embeds, components: panel.components });
+        return;
+      }
+
+      if (id.startsWith("admin_pricing:category:")) {
+        const category = id.split(":")[2] as "vps" | "minecraft" | "nodes" | "ipv4" | "billing" | "history";
         await interaction.deferUpdate();
-        const updated = await togglePlanActive(targetPlanId, interaction.user.id);
-        await refreshPricingChannel(interaction.client);
-        await interaction.followUp({ content: `✅ Plan **${updated.name}** is now **${updated.isActive ? "ACTIVE" : "DISABLED"}**.`, flags: 64 });
-        return;
-      }
 
-      if (action === "archive") {
-        await interaction.deferUpdate();
-        const archived = await archivePlan(targetPlanId, interaction.user.id);
-        await refreshPricingChannel(interaction.client);
-        await interaction.followUp({ content: `📂 Plan **${archived.name}** has been **ARCHIVED**.`, flags: 64 });
-        return;
-      }
-    }
-
-    if (id === "admin_pricing:billing_select") {
-      const selectedId = interaction.values[0].replace("admin_pricing:billing_edit_select:", "");
-      const options = await getBillingOptions("vps", true);
-      const mcOptions = await getBillingOptions("minecraft", true);
-      const opt = [...options, ...mcOptions].find((b) => b.id === selectedId);
-
-      if (!opt) {
-        await interaction.reply({ content: "❌ Billing option not found.", flags: 64 });
-        return;
-      }
-
-      const modal = new ModalBuilder()
-        .setCustomId(`admin_pricing:modal:billing_edit:${opt.id}`)
-        .setTitle(`Edit ${opt.category.toUpperCase()} ${opt.months}M Discount`);
-
-      const input = new TextInputBuilder()
-        .setCustomId("discount_percent")
-        .setLabel("Discount Percentage (0 to 100)")
-        .setStyle(TextInputStyle.Short)
-        .setValue(String(opt.discountPercent))
-        .setRequired(true);
-
-      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
-      await interaction.showModal(modal);
-      return;
-    }
-  }
-
-  // 3. Modal Submissions
-  if (interaction.isModalSubmit() && interaction.customId.startsWith("admin_pricing:modal:")) {
-    const id = interaction.customId;
-
-    if (id.startsWith("admin_pricing:modal:display_text:")) {
-      await interaction.deferReply({ flags: 64 });
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const title = interaction.fields.getTextInputValue("title").trim();
-      const subtitle = interaction.fields.getTextInputValue("subtitle")?.trim() || undefined;
-      const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
-      const footer = interaction.fields.getTextInputValue("footer")?.trim() || undefined;
-
-      await updateDisplaySettings(category, { title, subtitle, description, footer }, interaction.user.id);
-      await refreshPricingChannel(interaction.client);
-      await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** display titles and text.` });
-      return;
-    }
-
-
-
-    if (id.startsWith("admin_pricing:modal:display_features:")) {
-      await interaction.deferReply({ flags: 64 });
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const raw = interaction.fields.getTextInputValue("features");
-      const features = raw.split("\n").map((s) => s.trim()).filter(Boolean);
-
-      await updateDisplaySettings(category, { features }, interaction.user.id);
-      await refreshPricingChannel(interaction.client);
-      await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** feature list (${features.length} items).` });
-      return;
-    }
-
-    if (id.startsWith("admin_pricing:modal:add:")) {
-      await interaction.deferReply({ flags: 64 });
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const name = interaction.fields.getTextInputValue("plan_name").trim();
-      const priceInr = parseFloat(interaction.fields.getTextInputValue("price_inr"));
-      const priceUsd = parseFloat(interaction.fields.getTextInputValue("price_usd"));
-      const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
-
-      if (!name || isNaN(priceInr) || isNaN(priceUsd) || priceInr < 0 || priceUsd < 0) {
-        await interaction.editReply({ content: "❌ Invalid input. Name is required and prices must be non-negative numbers." });
-        return;
-      }
-
-      let ramGb = 1;
-      let vcpu = 1;
-      let storageGb = 10;
-      let memoryMb = 1024;
-      let cpuPercent = 100;
-
-      if (category === "vps") {
-        const specs = interaction.fields.getTextInputValue("vps_specs").split(",").map((s) => parseInt(s.trim(), 10));
-        if (specs.length < 3 || specs.some(isNaN) || specs.some((n) => n <= 0)) {
-          await interaction.editReply({ content: "❌ Invalid VPS specs. Must provide RAM GB, vCPU, and Storage GB as positive numbers." });
+        if (category === "vps" || category === "minecraft") {
+          const db = await renderCategoryDashboard(category);
+          await interaction.editReply({ embeds: db.embeds, components: db.components });
           return;
         }
-        [ramGb, vcpu, storageGb] = specs;
-        memoryMb = ramGb * 1024;
-        cpuPercent = vcpu * 100;
-      } else {
-        const specs = interaction.fields.getTextInputValue("mc_specs").split(",").map((s) => parseInt(s.trim(), 10));
-        if (specs.length < 3 || specs.some(isNaN) || specs.some((n) => n <= 0)) {
-          await interaction.editReply({ content: "❌ Invalid Minecraft specs. Must provide RAM MB, CPU %, and Storage GB as positive numbers." });
+        if (category === "nodes") {
+          const db = await renderAdminNodesDashboard();
+          await interaction.editReply({ embeds: db.embeds, components: db.components });
           return;
         }
-        [memoryMb, cpuPercent, storageGb] = specs;
-        ramGb = Math.ceil(memoryMb / 1024);
-        vcpu = Math.ceil(cpuPercent / 100);
+        if (category === "billing") {
+          const db = await renderBillingAdminDashboard();
+          await interaction.editReply({ embeds: db.embeds, components: db.components });
+          return;
+        }
+        if (category === "history") {
+          const db = await renderAuditHistoryDashboard();
+          await interaction.editReply({ embeds: db.embeds, components: db.components });
+          return;
+        }
       }
 
-      const created = await createCatalogPlan(
-        { category, name, description, ramGb, vcpu, storageGb, memoryMb, cpuPercent, priceInr, priceUsd },
-        interaction.user.id
-      );
+      if (id.startsWith("admin_pricing:plan:add:")) {
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        const modal = buildPlanModal(category);
+        await interaction.showModal(modal);
+        return;
+      }
 
-      await refreshPricingChannel(interaction.client);
-      await interaction.editReply({ content: `✅ Created new **${category.toUpperCase()}** plan **${created.name}** (₹${created.priceInr} / $${created.priceUsd}).` });
-      return;
+      if (id.startsWith("admin_pricing:plan:edit_select:")) {
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        await interaction.deferReply({ flags: 64 });
+        const res = await renderPlanSelectMenu(category, "edit");
+        await interaction.editReply(res);
+        return;
+      }
+
+      if (id.startsWith("admin_pricing:plan:toggle_select:")) {
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        await interaction.deferReply({ flags: 64 });
+        const res = await renderPlanSelectMenu(category, "toggle");
+        await interaction.editReply(res);
+        return;
+      }
+
+      if (id.startsWith("admin_pricing:plan:archive_select:")) {
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        await interaction.deferReply({ flags: 64 });
+        const res = await renderPlanSelectMenu(category, "archive");
+        await interaction.editReply(res);
+        return;
+      }
+
+      if (id === "admin_pricing:node:add") {
+        const modal = buildNodeModal();
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (id === "admin_pricing:node:edit_select") {
+        await interaction.deferReply({ flags: 64 });
+        const res = await renderNodeSelectMenu("edit");
+        await interaction.editReply(res);
+        return;
+      }
+
+      if (id === "admin_pricing:node:toggle_select") {
+        await interaction.deferReply({ flags: 64 });
+        const res = await renderNodeSelectMenu("toggle");
+        await interaction.editReply(res);
+        return;
+      }
+
+      if (id === "admin_pricing:node:archive_select") {
+        await interaction.deferReply({ flags: 64 });
+        const res = await renderNodeSelectMenu("archive");
+        await interaction.editReply(res);
+        return;
+      }
     }
 
-    if (id.startsWith("admin_pricing:modal:edit:")) {
-      await interaction.deferReply({ flags: 64 });
-      const planId = id.replace("admin_pricing:modal:edit:", "");
-      const existing = await getPricingPlanById(planId);
+    // 2. Select Menu Executions
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("admin_pricing:")) {
+      const id = interaction.customId;
 
-      if (!existing) {
-        await interaction.editReply({ content: "❌ Target plan not found." });
+      if (id.startsWith("admin_pricing:select_exec:")) {
+        const action = id.split(":")[2] as "edit" | "toggle" | "archive";
+        const selectedValue = interaction.values[0];
+        const targetPlanId = selectedValue.split(":")[3];
+
+        if (action === "edit") {
+          const plan = await getPricingPlanById(targetPlanId);
+          if (!plan) {
+            await interaction.reply({ content: "❌ Plan not found.", flags: 64 });
+            return;
+          }
+          const modal = buildPlanModal(plan.category, plan);
+          await interaction.showModal(modal);
+          return;
+        }
+
+        if (action === "toggle") {
+          await interaction.deferUpdate();
+          const updated = await togglePlanActive(targetPlanId, interaction.user.id);
+          refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+          await interaction.followUp({ content: `✅ Plan **${updated.name}** is now **${updated.isActive ? "ACTIVE" : "DISABLED"}**.`, flags: 64 });
+          return;
+        }
+
+        if (action === "archive") {
+          await interaction.deferUpdate();
+          const archived = await archivePlan(targetPlanId, interaction.user.id);
+          refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+          await interaction.followUp({ content: `📂 Plan **${archived.name}** has been **ARCHIVED**.`, flags: 64 });
+          return;
+        }
+      }
+
+      if (id.startsWith("admin_pricing:node_select_exec:")) {
+        const action = id.split(":")[2] as "edit" | "toggle" | "archive";
+        const selectedValue = interaction.values[0];
+        const targetNodeId = selectedValue.split(":")[3];
+
+        if (action === "edit") {
+          const node = await getHostingNodeById(targetNodeId);
+          if (!node) {
+            await interaction.reply({ content: "❌ Node not found.", flags: 64 });
+            return;
+          }
+          const modal = buildNodeModal(node);
+          await interaction.showModal(modal);
+          return;
+        }
+
+        if (action === "toggle") {
+          await interaction.deferUpdate();
+          const updated = await toggleHostingNodeActive(targetNodeId, interaction.user.id);
+          refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+          await interaction.followUp({ content: `✅ Node **${updated.displayName}** is now **${updated.isActive ? "ACTIVE" : "DISABLED"}**.`, flags: 64 });
+          return;
+        }
+
+        if (action === "archive") {
+          await interaction.deferUpdate();
+          const archived = await archiveHostingNode(targetNodeId, interaction.user.id);
+          refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+          await interaction.followUp({ content: `📂 Node **${archived.displayName}** has been **ARCHIVED**.`, flags: 64 });
+          return;
+        }
+      }
+
+      if (id === "admin_pricing:billing_select") {
+        const selectedId = interaction.values[0].replace("admin_pricing:billing_edit_select:", "");
+        const options = await getBillingOptions("vps", true);
+        const mcOptions = await getBillingOptions("minecraft", true);
+        const opt = [...options, ...mcOptions].find((b) => b.id === selectedId);
+
+        if (!opt) {
+          await interaction.reply({ content: "❌ Billing option not found.", flags: 64 });
+          return;
+        }
+
+        const modal = new ModalBuilder()
+          .setCustomId(`admin_pricing:modal:billing_edit:${opt.id}`)
+          .setTitle(`Edit ${opt.category.toUpperCase()} ${opt.months}M Discount`);
+
+        const input = new TextInputBuilder()
+          .setCustomId("discount_percent")
+          .setLabel("Discount Percentage (0 to 100)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(String(opt.discountPercent))
+          .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+        await interaction.showModal(modal);
+        return;
+      }
+    }
+
+    // 3. Modal Submissions
+    if (interaction.isModalSubmit() && interaction.customId.startsWith("admin_pricing:modal:")) {
+      const id = interaction.customId;
+
+      if (id.startsWith("admin_pricing:modal:display_text:")) {
+        await interaction.deferReply({ flags: 64 });
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        const title = interaction.fields.getTextInputValue("title").trim();
+        const subtitle = interaction.fields.getTextInputValue("subtitle")?.trim() || undefined;
+        const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
+        const footer = interaction.fields.getTextInputValue("footer")?.trim() || undefined;
+
+        await updateDisplaySettings(category, { title, subtitle, description, footer }, interaction.user.id);
+        refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+        await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** display titles and text.` });
         return;
       }
 
-      const name = interaction.fields.getTextInputValue("plan_name").trim();
-      const priceInr = parseFloat(interaction.fields.getTextInputValue("price_inr"));
-      const priceUsd = parseFloat(interaction.fields.getTextInputValue("price_usd"));
-      const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
+      if (id.startsWith("admin_pricing:modal:display_features:")) {
+        await interaction.deferReply({ flags: 64 });
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        const raw = interaction.fields.getTextInputValue("features");
+        const features = raw.split("\n").map((s) => s.trim()).filter(Boolean);
 
-      if (!name || isNaN(priceInr) || isNaN(priceUsd) || priceInr < 0 || priceUsd < 0) {
-        await interaction.editReply({ content: "❌ Invalid input numbers." });
+        await updateDisplaySettings(category, { features }, interaction.user.id);
+        refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+        await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** feature list (${features.length} items).` });
         return;
       }
 
-      let ramGb = existing.ramGb;
-      let vcpu = existing.vcpu;
-      let storageGb = existing.storageGb;
-      let memoryMb = existing.memoryMb;
-      let cpuPercent = existing.cpuPercent;
+      if (id.startsWith("admin_pricing:modal:add:")) {
+        await interaction.deferReply({ flags: 64 });
+        const category = id.split(":")[3] as "vps" | "minecraft";
+        const name = interaction.fields.getTextInputValue("plan_name").trim();
+        const priceInr = parseFloat(interaction.fields.getTextInputValue("price_inr"));
+        const priceUsd = parseFloat(interaction.fields.getTextInputValue("price_usd"));
+        const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
 
-      if (existing.category === "vps") {
-        const specs = interaction.fields.getTextInputValue("vps_specs").split(",").map((s) => parseInt(s.trim(), 10));
-        if (specs.length === 3 && !specs.some(isNaN)) {
+        if (!name || isNaN(priceInr) || isNaN(priceUsd) || priceInr < 0 || priceUsd < 0) {
+          await interaction.editReply({ content: "❌ Invalid input. Name is required and prices must be non-negative numbers." });
+          return;
+        }
+
+        let ramGb = 1;
+        let vcpu = 1;
+        let storageGb = 10;
+        let memoryMb = 1024;
+        let cpuPercent = 100;
+
+        if (category === "vps") {
+          const specs = interaction.fields.getTextInputValue("vps_specs").split(",").map((s) => parseInt(s.trim(), 10));
+          if (specs.length < 3 || specs.some(isNaN) || specs.some((n) => n <= 0)) {
+            await interaction.editReply({ content: "❌ Invalid VPS specs. Must provide RAM GB, vCPU, and Storage GB as positive numbers." });
+            return;
+          }
           [ramGb, vcpu, storageGb] = specs;
           memoryMb = ramGb * 1024;
           cpuPercent = vcpu * 100;
-        }
-      } else {
-        const specs = interaction.fields.getTextInputValue("mc_specs").split(",").map((s) => parseInt(s.trim(), 10));
-        if (specs.length === 3 && !specs.some(isNaN)) {
+        } else {
+          const specs = interaction.fields.getTextInputValue("mc_specs").split(",").map((s) => parseInt(s.trim(), 10));
+          if (specs.length < 3 || specs.some(isNaN) || specs.some((n) => n <= 0)) {
+            await interaction.editReply({ content: "❌ Invalid Minecraft specs. Must provide RAM MB, CPU %, and Storage GB as positive numbers." });
+            return;
+          }
           [memoryMb, cpuPercent, storageGb] = specs;
-          ramGb = Math.ceil((memoryMb || 1024) / 1024);
-          vcpu = Math.ceil((cpuPercent || 100) / 100);
+          ramGb = Math.ceil(memoryMb / 1024);
+          vcpu = Math.ceil(cpuPercent / 100);
         }
-      }
 
-      const updated = await updateCatalogPlan(
-        planId,
-        { name, description, ramGb, vcpu, storageGb, memoryMb: memoryMb ?? undefined, cpuPercent: cpuPercent ?? undefined, priceInr, priceUsd },
-        interaction.user.id
-      );
+        const created = await createCatalogPlan(
+          { category, name, description, ramGb, vcpu, storageGb, memoryMb, cpuPercent, priceInr, priceUsd },
+          interaction.user.id
+        );
 
-      await refreshPricingChannel(interaction.client);
-      await interaction.editReply({ content: `✅ Updated plan **${updated.name}** successfully.` });
-      return;
-    }
-
-    if (id.startsWith("admin_pricing:modal:billing_edit:")) {
-      await interaction.deferReply({ flags: 64 });
-      const optionId = id.replace("admin_pricing:modal:billing_edit:", "");
-      const val = parseFloat(interaction.fields.getTextInputValue("discount_percent"));
-
-      if (isNaN(val) || val < 0 || val > 100) {
-        await interaction.editReply({ content: "❌ Discount percentage must be between 0 and 100." });
+        refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+        await interaction.editReply({ content: `✅ Created new **${category.toUpperCase()}** plan **${created.name}** (₹${created.priceInr} / $${created.priceUsd}).` });
         return;
       }
 
-      const updated = await updateBillingOption(optionId, val, interaction.user.id);
-      await refreshPricingChannel(interaction.client);
-      await interaction.editReply({ content: `✅ Updated **${updated.category.toUpperCase()} ${updated.months}M** discount to **${updated.discountPercent}%**.` });
-      return;
+      if (id.startsWith("admin_pricing:modal:edit:")) {
+        await interaction.deferReply({ flags: 64 });
+        const planId = id.replace("admin_pricing:modal:edit:", "");
+        const existing = await getPricingPlanById(planId);
+
+        if (!existing) {
+          await interaction.editReply({ content: "❌ Target plan not found." });
+          return;
+        }
+
+        const name = interaction.fields.getTextInputValue("plan_name").trim();
+        const priceInr = parseFloat(interaction.fields.getTextInputValue("price_inr"));
+        const priceUsd = parseFloat(interaction.fields.getTextInputValue("price_usd"));
+        const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
+
+        if (!name || isNaN(priceInr) || isNaN(priceUsd) || priceInr < 0 || priceUsd < 0) {
+          await interaction.editReply({ content: "❌ Invalid input numbers." });
+          return;
+        }
+
+        let ramGb = existing.ramGb;
+        let vcpu = existing.vcpu;
+        let storageGb = existing.storageGb;
+        let memoryMb = existing.memoryMb;
+        let cpuPercent = existing.cpuPercent;
+
+        if (existing.category === "vps") {
+          const specs = interaction.fields.getTextInputValue("vps_specs").split(",").map((s) => parseInt(s.trim(), 10));
+          if (specs.length === 3 && !specs.some(isNaN)) {
+            [ramGb, vcpu, storageGb] = specs;
+            memoryMb = ramGb * 1024;
+            cpuPercent = vcpu * 100;
+          }
+        } else {
+          const specs = interaction.fields.getTextInputValue("mc_specs").split(",").map((s) => parseInt(s.trim(), 10));
+          if (specs.length === 3 && !specs.some(isNaN)) {
+            [memoryMb, cpuPercent, storageGb] = specs;
+            ramGb = Math.ceil((memoryMb || 1024) / 1024);
+            vcpu = Math.ceil((cpuPercent || 100) / 100);
+          }
+        }
+
+        const updated = await updateCatalogPlan(
+          planId,
+          { name, description, ramGb, vcpu, storageGb, memoryMb: memoryMb ?? undefined, cpuPercent: cpuPercent ?? undefined, priceInr, priceUsd },
+          interaction.user.id
+        );
+
+        refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+        await interaction.editReply({ content: `✅ Updated plan **${updated.name}** successfully.` });
+        return;
+      }
+
+      if (id === "admin_pricing:modal:node_add") {
+        await interaction.deferReply({ flags: 64 });
+        const displayName = interaction.fields.getTextInputValue("display_name").trim();
+        const locDetails = interaction.fields.getTextInputValue("location_details").split(",").map((s) => s.trim());
+        const nodeName = interaction.fields.getTextInputValue("node_name").trim();
+        const hostname = interaction.fields.getTextInputValue("hostname").trim();
+        const catOrder = interaction.fields.getTextInputValue("category_order").split(",").map((s) => s.trim());
+
+        if (locDetails.length < 3 || !displayName || !nodeName || !hostname) {
+          await interaction.editReply({ content: "❌ Invalid node input. Country code, flag, location, node name, and hostname are required." });
+          return;
+        }
+
+        const countryCode = locDetails[0];
+        const countryFlag = locDetails[1];
+        const locationName = locDetails[2];
+        const category = (catOrder[0]?.toLowerCase() as "vps" | "minecraft" | "both") || "both";
+        const displayOrder = parseInt(catOrder[1] || "1", 10) || 1;
+
+        const createdNode = await createHostingNode(
+          { category, displayName, countryCode, countryFlag, locationName, nodeName, hostname, displayOrder },
+          interaction.user.id
+        );
+
+        refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+        await interaction.editReply({ content: `✅ Added hosting node **${createdNode.displayName}** (${createdNode.hostname}).` });
+        return;
+      }
+
+      if (id.startsWith("admin_pricing:modal:node_edit:")) {
+        await interaction.deferReply({ flags: 64 });
+        const nodeId = id.replace("admin_pricing:modal:node_edit:", "");
+        const displayName = interaction.fields.getTextInputValue("display_name").trim();
+        const locDetails = interaction.fields.getTextInputValue("location_details").split(",").map((s) => s.trim());
+        const nodeName = interaction.fields.getTextInputValue("node_name").trim();
+        const hostname = interaction.fields.getTextInputValue("hostname").trim();
+        const catOrder = interaction.fields.getTextInputValue("category_order").split(",").map((s) => s.trim());
+
+        if (locDetails.length < 3 || !displayName || !nodeName || !hostname) {
+          await interaction.editReply({ content: "❌ Invalid node input." });
+          return;
+        }
+
+        const countryCode = locDetails[0];
+        const countryFlag = locDetails[1];
+        const locationName = locDetails[2];
+        const category = (catOrder[0]?.toLowerCase() as "vps" | "minecraft" | "both") || "both";
+        const displayOrder = parseInt(catOrder[1] || "1", 10) || 1;
+
+        const updatedNode = await updateHostingNode(
+          nodeId,
+          { category, displayName, countryCode, countryFlag, locationName, nodeName, hostname, displayOrder },
+          interaction.user.id
+        );
+
+        refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+        await interaction.editReply({ content: `✅ Updated node **${updatedNode.displayName}**.` });
+        return;
+      }
+
+      if (id.startsWith("admin_pricing:modal:billing_edit:")) {
+        await interaction.deferReply({ flags: 64 });
+        const optionId = id.replace("admin_pricing:modal:billing_edit:", "");
+        const val = parseFloat(interaction.fields.getTextInputValue("discount_percent"));
+
+        if (isNaN(val) || val < 0 || val > 100) {
+          await interaction.editReply({ content: "❌ Discount percentage must be between 0 and 100." });
+          return;
+        }
+
+        const updated = await updateBillingOption(optionId, val, interaction.user.id);
+        refreshPricingChannel(interaction.client).catch((err) => console.error("Refresh pricing channel failed:", err));
+        await interaction.editReply({ content: `✅ Updated **${updated.category.toUpperCase()} ${updated.months}M** discount to **${updated.discountPercent}%**.` });
+        return;
+      }
+    }
+  } catch (error) {
+    console.error("❌ Admin Pricing Interaction Error:", error);
+    if (interaction.isRepliable()) {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: "❌ Operation failed. Check bot logs." }).catch(() => {});
+      } else {
+        await interaction.reply({ content: "❌ Operation failed. Check bot logs.", flags: 64 }).catch(() => {});
+      }
     }
   }
 }
@@ -1542,76 +1712,31 @@ async function handleVpsCreateCommand(interaction: ChatInputCommandInteraction, 
 async function handlePricingPlan(
   interaction: StringSelectMenuInteraction
 ): Promise<void> {
-  const parts =
-    interaction.customId.split(":");
+  await interaction.deferReply({ flags: 64 });
+  try {
+    const parts = interaction.customId.split(":");
+    const nodeId = parts[2];
+    const selectedValue = interaction.values[0];
 
-  const location =
-    parts[2] as PricingLocation;
+    if (!selectedValue) {
+      await interaction.editReply({ content: "❌ Please select a VPS plan." });
+      return;
+    }
 
-  if (
-    location !== "India" &&
-    location !== "Singapore" &&
-    location !== "Japan"
-  ) {
-    await interaction.reply({
-      content:
-        "❌ Invalid pricing location.",
-      flags: 64,
-    });
+    const valueParts = selectedValue.split(":");
+    const planId = valueParts[3] || valueParts[2] || selectedValue;
 
-    return;
+    if (!planId) {
+      await interaction.editReply({ content: "❌ Invalid VPS plan." });
+      return;
+    }
+
+    const result = await createPlanDetails(planId, nodeId);
+    await interaction.editReply({ embeds: [result.embed], components: result.components });
+  } catch (err) {
+    console.error("handlePricingPlan failed:", err);
+    await interaction.editReply({ content: "❌ Unable to display plan details right now." }).catch(() => {});
   }
-
-  const selectedValue =
-    interaction.values[0];
-
-  if (!selectedValue) {
-    await interaction.reply({
-      content:
-        "❌ Please select a VPS plan.",
-      flags: 64,
-    });
-
-    return;
-  }
-
-  const valueParts =
-    selectedValue.split(":");
-
-  const planId =
-    valueParts[3];
-
-  if (!planId) {
-    await interaction.reply({
-      content:
-        "❌ Invalid VPS plan.",
-      flags: 64,
-    });
-
-    return;
-  }
-
-  const result =
-    await createPlanDetails(
-      planId,
-      location
-    );
-
-  /*
-   * The public pricing message must
-   * never be modified.
-   */
-
-  await interaction.reply({
-    embeds: [
-      result.embed,
-    ],
-
-    components:
-      result.components,
-
-    flags: 64,
-  });
 }
 
 // ============================================================
@@ -1621,124 +1746,33 @@ async function handlePricingPlan(
 async function handlePricingButton(
   interaction: ButtonInteraction
 ): Promise<void> {
-  const customId =
-    interaction.customId;
+  const customId = interaction.customId;
 
-  // ==========================================================
-  // OPEN PRICING FROM WELCOME
-  // ==========================================================
-
-  if (
-    customId ===
-    "pricing:open"
-  ) {
-    await interaction.reply({
-      ...await createPricingPanel(
-        "India"
-      ),
-      flags: 64,
-    });
-
+  if (customId === "pricing:open") {
+    await interaction.deferReply({ flags: 64 });
+    const panel = await createPricingPanel();
+    await interaction.editReply({ embeds: panel.embeds, components: panel.components });
     return;
   }
 
-  // ==========================================================
-  // LOCATION
-  // ==========================================================
-
-  if (
-    customId.startsWith(
-      "pricing:location:"
-    )
-  ) {
-    const location =
-      customId.replace(
-        "pricing:location:",
-        ""
-      ) as PricingLocation;
-
-    if (
-      location !== "India" &&
-      location !== "Singapore" &&
-      location !== "Japan"
-    ) {
-      await interaction.reply({
-        content:
-          "❌ Invalid pricing location.",
-        flags: 64,
-      });
-
-      return;
-    }
-
-    /*
-     * This may come from the PUBLIC
-     * pricing message.
-     *
-     * Therefore create a PRIVATE
-     * pricing panel.
-     */
-
-    await interaction.reply({
-      ...await createPricingPanel(
-        location
-      ),
-      flags: 64,
-    });
-
+  if (customId.startsWith("pricing:location:")) {
+    await interaction.deferReply({ flags: 64 });
+    const nodeId = customId.replace("pricing:location:", "");
+    const panel = await createPricingPanel(nodeId);
+    await interaction.editReply({ embeds: panel.embeds, components: panel.components });
     return;
   }
 
-  // ==========================================================
-  // BACK TO PLANS
-  // ==========================================================
-
-  if (
-    customId.startsWith(
-      "pricing:back:"
-    )
-  ) {
-    const location =
-      customId.replace(
-        "pricing:back:",
-        ""
-      ) as PricingLocation;
-
-    if (
-      location !== "India" &&
-      location !== "Singapore" &&
-      location !== "Japan"
-    ) {
-      return;
-    }
-
-    /*
-     * This is already inside the
-     * customer's private interaction.
-     */
-
-    await interaction.update(
-      await createPricingPanel(
-        location
-      )
-    );
-
+  if (customId.startsWith("pricing:back:")) {
+    await interaction.deferUpdate();
+    const nodeId = customId.replace("pricing:back:", "");
+    const panel = await createPricingPanel(nodeId);
+    await interaction.editReply({ embeds: panel.embeds, components: panel.components });
     return;
   }
 
-  // ==========================================================
-  // CREATE VPS TICKET
-  // ==========================================================
-
-  if (
-    customId.startsWith(
-      "pricing:create:"
-    )
-  ) {
-    await createPricingTicket(
-      interaction
-    );
-
+  if (customId.startsWith("pricing:create:")) {
+    await createPricingTicket(interaction);
     return;
   }
 }
@@ -1752,145 +1786,70 @@ async function createPricingTicket(
 ): Promise<void> {
   if (!interaction.guild) {
     await interaction.reply({
-      content:
-        "❌ Tickets can only be created inside the server.",
+      content: "❌ Tickets can only be created inside the server.",
       flags: 64,
     });
-
     return;
   }
 
-  const parts =
-    interaction.customId.split(":");
-
-  const location =
-    parts[2] as PricingLocation;
-
-  const planId =
-    parts[3];
-
-  if (
-    !location ||
-    !planId
-  ) {
-    await interaction.reply({
-      content:
-        "❌ Invalid VPS selection.",
-      flags: 64,
-    });
-
-    return;
-  }
-
-  if (
-    location !== "India" &&
-    location !== "Singapore" &&
-    location !== "Japan"
-  ) {
-    await interaction.reply({
-      content:
-        "❌ Invalid VPS location.",
-      flags: 64,
-    });
-
-    return;
-  }
-
-  await interaction.deferReply({
-    flags: 64,
-  });
+  await interaction.deferReply({ flags: 64 });
 
   try {
-    const plan =
-      await getPricingPlanById(
-        planId
-      );
+    const parts = interaction.customId.split(":");
+    const nodeId = parts[2];
+    const planId = parts[3];
 
-    if (!plan) {
-      await interaction.editReply({
-        content:
-          "❌ This VPS plan is no longer available.",
-        embeds: [],
-        components: [],
-      });
-
+    if (!planId) {
+      await interaction.editReply({ content: "❌ Invalid VPS selection." });
       return;
     }
 
-    const member =
-      await interaction.guild.members.fetch(
-        interaction.user.id
-      );
+    const plan = await getPricingPlanById(planId);
+    if (!plan) {
+      await interaction.editReply({ content: "❌ This VPS plan is no longer available." });
+      return;
+    }
 
-    const ticketChannel =
-      await createTicket(
-        interaction.guild,
-        member,
-        "Sales",
-        {
-          location,
+    const node = nodeId ? await getHostingNodeById(nodeId) : null;
+    const locationStr = node ? `${node.countryFlag} ${node.locationName} (${node.nodeName})` : "Germany";
 
-          planId:
-            plan.id,
+    const member = await interaction.guild.members.fetch(interaction.user.id);
 
-          planName:
-            plan.name,
-
-          priceInr:
-            plan.priceInr,
-
-          priceUsd:
-            plan.priceUsd,
-
-          ramGb:
-            plan.ramGb,
-
-          storageGb:
-            plan.storageGb,
-
-          vcpu:
-            plan.vcpu,
-
-          fullRootAccess:
-            true,
-
-          instantDeployment:
-            true,
-
-          discordSupport:
-            true,
-
-          networkAllocation:
-            "IPv4/IPv6 availability depends on provider and location",
-
-          cpuModels:
-            CPU_MODELS,
-        }
-      );
+    const ticketChannel = await createTicket(
+      interaction.guild,
+      member,
+      "Sales",
+      {
+        location: locationStr,
+        hostingNodeId: node?.id,
+        planId: plan.id,
+        planName: plan.name,
+        priceInr: plan.priceInr,
+        priceUsd: plan.priceUsd,
+        ramGb: plan.ramGb,
+        storageGb: plan.storageGb,
+        vcpu: plan.vcpu,
+        fullRootAccess: true,
+        instantDeployment: true,
+        discordSupport: true,
+        networkAllocation: "IPv4/IPv6 availability depends on provider and location",
+        cpuModels: CPU_MODELS,
+      }
+    );
 
     await interaction.editReply({
       content:
         `🎫 **Sales ticket created!**\n\n` +
         `Your VPS selection has been attached to the ticket.\n\n` +
         `${ticketChannel}`,
-
       embeds: [],
-
       components: [],
     });
-
   } catch (error) {
-    console.error(
-      "❌ Failed to create VPS Sales ticket:",
-      error
-    );
-
+    console.error("❌ Failed to create VPS Sales ticket:", error);
     await interaction.editReply({
-      content:
-        "❌ We couldn't create your Sales ticket. Please try again or contact staff if the problem continues.",
-
+      content: "❌ We couldn't create your Sales ticket. Please try again or contact staff if the problem continues.",
       embeds: [],
-
       components: [],
     });
   }

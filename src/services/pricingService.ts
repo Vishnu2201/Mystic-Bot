@@ -270,6 +270,7 @@ export async function createHostingNode(
 export async function updateHostingNode(
   id: string,
   input: {
+    category?: "vps" | "minecraft" | "both";
     displayName?: string;
     countryCode?: string;
     countryFlag?: string;
@@ -283,6 +284,7 @@ export async function updateHostingNode(
   const existing = await getHostingNodeById(id);
   if (!existing) throw new Error("Hosting node not found.");
 
+  const category = input.category ?? existing.category;
   const displayName = input.displayName ?? existing.displayName;
   const countryCode = input.countryCode ?? existing.countryCode;
   const countryFlag = input.countryFlag ?? existing.countryFlag;
@@ -294,15 +296,15 @@ export async function updateHostingNode(
   const result = await pool.query<HostingNode>(
     `
     UPDATE hosting_nodes
-    SET display_name = $1, country_code = $2, country_flag = $3, location_name = $4,
-        node_name = $5, hostname = $6, display_order = $7, updated_at = NOW(), updated_by_discord_id = $8
-    WHERE id = $9
+    SET category = $1, display_name = $2, country_code = $3, country_flag = $4, location_name = $5,
+        node_name = $6, hostname = $7, display_order = $8, updated_at = NOW(), updated_by_discord_id = $9
+    WHERE id = $10
     RETURNING
       id, category, display_name AS "displayName", country_code AS "countryCode",
       country_flag AS "countryFlag", location_name AS "locationName", node_name AS "nodeName",
       hostname, is_active AS "isActive", is_archived AS "isArchived", display_order AS "displayOrder"
     `,
-    [displayName, countryCode, countryFlag, locationName, nodeName, hostname, displayOrder, adminDiscordId, id]
+    [category, displayName, countryCode, countryFlag, locationName, nodeName, hostname, displayOrder, adminDiscordId, id]
   );
 
   const updatedNode = result.rows[0];

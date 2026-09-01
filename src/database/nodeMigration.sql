@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS hosting_nodes (
     country_flag VARCHAR(10) NOT NULL DEFAULT '🇩🇪',
     location_name VARCHAR(255) NOT NULL DEFAULT 'Germany',
     node_name VARCHAR(255) NOT NULL DEFAULT 'DE-01',
-    hostname VARCHAR(255) NOT NULL DEFAULT 'de-01.mysticservers.com',
+    hostname VARCHAR(255) NOT NULL DEFAULT 'minecraft.mysticservers.com',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     is_archived BOOLEAN NOT NULL DEFAULT FALSE,
     display_order INTEGER NOT NULL DEFAULT 1,
@@ -26,19 +26,20 @@ CREATE INDEX IF NOT EXISTS idx_hosting_nodes_active ON hosting_nodes(category, i
 INSERT INTO hosting_nodes (
     category, display_name, country_code, country_flag, location_name, node_name, hostname, is_active, is_archived, display_order
 )
-VALUES (
+SELECT
     'both',
     'Germany — DE-01',
     'DE',
     '🇩🇪',
     'Germany',
     'DE-01',
-    'de-01.mysticservers.com',
+    'minecraft.mysticservers.com',
     TRUE,
     FALSE,
     1
-)
-ON CONFLICT DO NOTHING;
+WHERE NOT EXISTS (
+    SELECT 1 FROM hosting_nodes WHERE node_name = 'DE-01' AND location_name = 'Germany'
+);
 
 -- Add nullable hosting_node_id foreign key references
 DO $$
@@ -57,3 +58,41 @@ BEGIN
     ALTER TABLE minecraft_servers ADD COLUMN hosting_node_id UUID REFERENCES hosting_nodes(id);
   END IF;
 END $$;
+
+-- Safe One-Time / Idempotent Deduplication Migration
+DO $$
+DECLARE
+    canonical_id UUID;
+BEGIN
+    -- For Germany / DE-01 duplicate records, find canonical (earliest created) record
+    SELECT id INTO canonical_id
+    FROM hosting_nodes
+    WHERE location_name = 'Germany' AND node_name = 'DE-01'
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1;
+
+    IF canonical_id IS NOT NULL THEN
+        -- Re-point any vps_instances referencing duplicate nodes to canonical node
+        UPDATE vps_instances
+        SET hosting_node_id = canonical_id
+        WHERE hosting_node_id IN (
+            SELECT id FROM hosting_nodes
+            WHERE location_name = 'Germany' AND node_name = 'DE-01' AND id <> canonical_id
+        );
+
+        -- Re-point any minecraft_servers referencing duplicate nodes to canonical node
+        UPDATE minecraft_servers
+        SET hosting_node_id = canonical_id
+        WHERE hosting_node_id IN (
+            SELECT id FROM hosting_nodes
+            WHERE location_name = 'Germany' AND node_name = 'DE-01' AND id <> canonical_id
+        );
+
+        -- Remove duplicate nodes safely (non-CASCADE)
+        DELETE FROM hosting_nodes
+        WHERE location_name = 'Germany' AND node_name = 'DE-01' AND id <> canonical_id;
+    END IF;
+END $$;
+
+-- Create unique index on (location_name, node_name) to guarantee deduplication going forward
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hosting_nodes_unique_identity ON hosting_nodes(location_name, node_name);

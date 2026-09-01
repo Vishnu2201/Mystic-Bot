@@ -228,7 +228,7 @@ export function buildNodeModal(existingNode?: HostingNode): ModalBuilder {
     .setLabel("Public Hostname / FQDN")
     .setStyle(TextInputStyle.Short)
     .setValue(existingNode?.hostname ?? "")
-    .setPlaceholder("e.g. de-01.mysticservers.com")
+    .setPlaceholder("e.g. minecraft.mysticservers.com")
     .setRequired(true);
 
   const catInput = new TextInputBuilder()
