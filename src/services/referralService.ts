@@ -73,7 +73,11 @@ export async function syncGuildInvites(client: Client): Promise<void> {
     for (const guild of client.guilds.cache.values()) {
       try {
         const guildMap = new Map<string, number>();
-        const invites = await guild.invites.fetch();
+        const invites = await guild.invites.fetch().catch(() => null);
+        if (!invites) {
+          console.warn(`[Referrals] Unable to fetch invites for guild "${guild.name}" (${guild.id}). Ensure the bot has "Manage Server" (MANAGE_GUILD) permission.`);
+          continue;
+        }
 
         for (const inv of invites.values()) {
           guildMap.set(inv.code, inv.uses ?? 0);
