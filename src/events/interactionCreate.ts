@@ -543,29 +543,7 @@ async function handleAdminPricingInteraction(interaction: Interaction): Promise<
       return;
     }
 
-    if (id.startsWith("admin_pricing:display:edit_location:")) {
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const settings = await getDisplaySettings(category);
 
-      const modal = new ModalBuilder()
-        .setCustomId(`admin_pricing:modal:display_location:${category}`)
-        .setTitle(`Edit ${category.toUpperCase()} Location & Node`);
-
-      const locInput = new TextInputBuilder().setCustomId("location_name").setLabel("Location Name").setStyle(TextInputStyle.Short).setValue(settings.locationName ?? "").setRequired(false);
-      const flagInput = new TextInputBuilder().setCustomId("country_flag").setLabel("Country Flag Emoji").setStyle(TextInputStyle.Short).setValue(settings.countryFlag ?? "").setRequired(false);
-      const nodeInput = new TextInputBuilder().setCustomId("node_name").setLabel("Node Display Name").setStyle(TextInputStyle.Short).setValue(settings.nodeName ?? "").setRequired(false);
-      const hostInput = new TextInputBuilder().setCustomId("hostname").setLabel("Public Hostname").setStyle(TextInputStyle.Short).setValue(settings.hostname ?? "").setRequired(false);
-
-      modal.addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(locInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(flagInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(nodeInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(hostInput)
-      );
-
-      await interaction.showModal(modal);
-      return;
-    }
 
     if (id.startsWith("admin_pricing:display:edit_features:")) {
       const category = id.split(":")[3] as "vps" | "minecraft";
@@ -727,19 +705,7 @@ async function handleAdminPricingInteraction(interaction: Interaction): Promise<
       return;
     }
 
-    if (id.startsWith("admin_pricing:modal:display_location:")) {
-      await interaction.deferReply({ flags: 64 });
-      const category = id.split(":")[3] as "vps" | "minecraft";
-      const locationName = interaction.fields.getTextInputValue("location_name")?.trim() || undefined;
-      const countryFlag = interaction.fields.getTextInputValue("country_flag")?.trim() || undefined;
-      const nodeName = interaction.fields.getTextInputValue("node_name")?.trim() || undefined;
-      const hostname = interaction.fields.getTextInputValue("hostname")?.trim() || undefined;
 
-      await updateDisplaySettings(category, { locationName, countryFlag, nodeName, hostname }, interaction.user.id);
-      await refreshPricingChannel(interaction.client);
-      await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** location and node details.` });
-      return;
-    }
 
     if (id.startsWith("admin_pricing:modal:display_features:")) {
       await interaction.deferReply({ flags: 64 });

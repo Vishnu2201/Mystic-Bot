@@ -25,7 +25,8 @@ const supportRoleId =
   process.env.SUPPORT_ROLE_ID;
 
 export interface TicketVPSDetails {
-  location: "India" | "Singapore" | "Japan";
+  location: string;
+  hostingNodeId?: string;
 
   planId: string;
   planName: string;

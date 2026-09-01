@@ -27,6 +27,13 @@ import {
   updateDisplaySettings,
   renderVpsPricingPanel,
   renderMinecraftPricingPanel,
+  getHostingNodes,
+  getHostingNodeById,
+  createHostingNode,
+  updateHostingNode,
+  toggleHostingNodeActive,
+  archiveHostingNode,
+  HostingNode,
 } from "../services/pricingService";
 
 /**
@@ -47,14 +54,16 @@ export function checkAdminAuth(interaction: Interaction): boolean {
 export async function renderAdminPricingMainDashboard() {
   const vpsPlans = await getPricingPlans("vps", true);
   const mcPlans = await getPricingPlans("minecraft", true);
+  const nodes = await getHostingNodes(undefined, true);
 
   const embed = new EmbedBuilder()
     .setColor(0x3498db)
     .setTitle("⚙️ MYSTIC SERVERS — PRICING CATALOG CONTROL PANEL")
     .setDescription(
-      "Welcome Administrator! Select a product category below to manage live pricing, plan specifications, presentation text, and availability.\n\n" +
+      "Welcome Administrator! Select a product category below to manage live pricing, plan specifications, infrastructure nodes, presentation text, and availability.\n\n" +
         `🖥️ **VPS Catalog:** ${vpsPlans.length} plans (${vpsPlans.filter((p) => p.isActive).length} active)\n` +
         `🎮 **Minecraft Catalog:** ${mcPlans.length} plans (${mcPlans.filter((p) => p.isActive).length} active)\n` +
+        `🌍 **Hosting Nodes:** ${nodes.length} nodes (${nodes.filter((n) => n.isActive).length} active)\n` +
         "📝 **Display Settings:** Fully editable titles, subtitles, locations & features\n" +
         "🗓️ **Billing Discounts:** 1m, 3m, 6m, 12m rules\n\n" +
         "Select an option below to proceed."
@@ -65,9 +74,9 @@ export async function renderAdminPricingMainDashboard() {
   const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId("admin_pricing:category:vps").setLabel("VPS Plans").setEmoji("🖥️").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("admin_pricing:category:minecraft").setLabel("Minecraft Plans").setEmoji("🎮").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("admin_pricing:category:display_select").setLabel("Display Settings").setEmoji("📝").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("admin_pricing:category:billing").setLabel("Billing Discounts").setEmoji("🗓️").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("admin_pricing:category:history").setLabel("Audit History").setEmoji("📜").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId("admin_pricing:category:nodes").setLabel("Hosting Nodes").setEmoji("🌍").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("admin_pricing:category:display_select").setLabel("Display Settings").setEmoji("📝").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("admin_pricing:category:billing").setLabel("Billing Discounts").setEmoji("🗓️").setStyle(ButtonStyle.Secondary)
   );
 
   return { embeds: [embed], components: [buttons] };
@@ -113,6 +122,135 @@ export async function renderCategoryDashboard(category: "vps" | "minecraft") {
 }
 
 /**
+ * Hosting Nodes Admin Management Dashboard
+ */
+export async function renderAdminNodesDashboard() {
+  const nodes = await getHostingNodes(undefined, true);
+
+  const lines = nodes.length === 0
+    ? ["*No hosting nodes configured in database.*"]
+    : nodes.map((n) => {
+        const statusEmoji = n.isActive ? "🟢 Active" : "🔴 Disabled";
+        return `${n.countryFlag} **${n.displayName}** (\`${n.id}\`)\n   📍 Location: \`${n.locationName}\` • Node: \`${n.nodeName}\` • Host: \`${n.hostname}\`\n   Category: \`${n.category}\` • Order: \`${n.displayOrder}\` • Status: **${statusEmoji}**\n`;
+      });
+
+  const embed = new EmbedBuilder()
+    .setColor(0x2ecc71)
+    .setTitle("🌍 Admin Hosting Nodes — Infrastructure Source of Truth")
+    .setDescription(
+      "Manage live hosting nodes and location choices for VPS & Minecraft hosting.\n\n" +
+        "━━━━━━━━━━━━━━━━━━━━\n\n" +
+        lines.join("\n")
+    )
+    .setFooter({ text: "Customer location selectors update dynamically from active nodes." })
+    .setTimestamp();
+
+  const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("admin_pricing:node:add").setLabel("Add Node").setEmoji("➕").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("admin_pricing:node:edit_select").setLabel("Edit Node").setEmoji("✏️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("admin_pricing:node:toggle_select").setLabel("Enable/Disable").setEmoji("🔄").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("admin_pricing:node:archive_select").setLabel("Archive Node").setEmoji("📂").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("admin_pricing:main").setLabel("Back").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
+  );
+
+  return { embeds: [embed], components: [actionRow] };
+}
+
+/**
+ * Render Select Menu to select a Hosting Node for Edit / Toggle / Archive
+ */
+export async function renderNodeSelectMenu(action: "edit" | "toggle" | "archive") {
+  const nodes = await getHostingNodes(undefined, true);
+
+  if (nodes.length === 0) {
+    return { content: `❌ No hosting nodes found to ${action}.`, ephemeral: true };
+  }
+
+  const options = nodes.map((n) =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(`${n.countryFlag} ${n.displayName}`)
+      .setDescription(`Location: ${n.locationName} • Node: ${n.nodeName} • (${n.isActive ? "Active" : "Disabled"})`)
+      .setValue(`admin_pricing:node_action:${action}:${n.id}`)
+  );
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`admin_pricing:node_select_exec:${action}`)
+    .setPlaceholder(`Select a hosting node to ${action}...`)
+    .addOptions(options);
+
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+  const backRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId("admin_pricing:category:nodes").setLabel("Cancel").setStyle(ButtonStyle.Secondary)
+  );
+
+  return { content: `Select a **HOSTING NODE** to **${action.toUpperCase()}**:`, components: [row, backRow], flags: 64 };
+}
+
+/**
+ * Builds Modal for Adding or Editing a Hosting Node
+ */
+export function buildNodeModal(existingNode?: HostingNode): ModalBuilder {
+  const isEdit = Boolean(existingNode);
+  const modalId = isEdit
+    ? `admin_pricing:modal:node_edit:${existingNode!.id}`
+    : "admin_pricing:modal:node_add";
+
+  const modal = new ModalBuilder()
+    .setCustomId(modalId)
+    .setTitle(isEdit ? `Edit Node: ${existingNode!.nodeName}` : "Add New Hosting Node");
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId("display_name")
+    .setLabel("Display Name (e.g. Germany — DE-01)")
+    .setStyle(TextInputStyle.Short)
+    .setValue(existingNode?.displayName ?? "")
+    .setPlaceholder("e.g. Germany — DE-01")
+    .setRequired(true);
+
+  const locationInput = new TextInputBuilder()
+    .setCustomId("location_details")
+    .setLabel("Country Code, Flag Emoji, Location Name")
+    .setStyle(TextInputStyle.Short)
+    .setValue(existingNode ? `${existingNode.countryCode}, ${existingNode.countryFlag}, ${existingNode.locationName}` : "DE, 🇩🇪, Germany")
+    .setPlaceholder("e.g. DE, 🇩🇪, Germany")
+    .setRequired(true);
+
+  const nodeNameInput = new TextInputBuilder()
+    .setCustomId("node_name")
+    .setLabel("Node Name (e.g. DE-01)")
+    .setStyle(TextInputStyle.Short)
+    .setValue(existingNode?.nodeName ?? "")
+    .setPlaceholder("e.g. DE-01")
+    .setRequired(true);
+
+  const hostInput = new TextInputBuilder()
+    .setCustomId("hostname")
+    .setLabel("Public Hostname / FQDN")
+    .setStyle(TextInputStyle.Short)
+    .setValue(existingNode?.hostname ?? "")
+    .setPlaceholder("e.g. de-01.mysticservers.com")
+    .setRequired(true);
+
+  const catInput = new TextInputBuilder()
+    .setCustomId("category_order")
+    .setLabel("Category (vps/minecraft/both), Display Order")
+    .setStyle(TextInputStyle.Short)
+    .setValue(existingNode ? `${existingNode.category}, ${existingNode.displayOrder}` : "both, 1")
+    .setPlaceholder("e.g. both, 1")
+    .setRequired(true);
+
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(nameInput),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(locationInput),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(nodeNameInput),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(hostInput),
+    new ActionRowBuilder<TextInputBuilder>().addComponents(catInput)
+  );
+
+  return modal;
+}
+
+/**
  * Display Settings Management Dashboard per Category
  */
 export async function renderAdminDisplaySettingsDashboard(category: "vps" | "minecraft") {
@@ -127,8 +265,6 @@ export async function renderAdminDisplaySettingsDashboard(category: "vps" | "min
         "━━━━━━━━━━━━━━━━━━━━\n\n" +
         `📌 **Title:** \`${settings.title}\`\n` +
         `🏷️ **Subtitle:** \`${settings.subtitle ?? "None"}\`\n` +
-        `📍 **Location / Flag:** \`${settings.countryFlag ?? "🇮🇳"}\` \`${settings.locationName ?? "India"}\`\n` +
-        `🖥️ **Node / Hostname:** \`${settings.nodeName ?? "LXC-01"}\` • \`${settings.hostname ?? "mysticservers.com"}\`\n` +
         `✨ **Features Count:** ${settings.features.length} item(s)\n` +
         `📜 **Footer:** \`${settings.footer ?? "None"}\`\n\n` +
         "Select an option below to edit presentation fields or preview live rendering."
@@ -138,7 +274,6 @@ export async function renderAdminDisplaySettingsDashboard(category: "vps" | "min
 
   const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`admin_pricing:display:edit_text:${category}`).setLabel("Text & Titles").setEmoji("✏️").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`admin_pricing:display:edit_location:${category}`).setLabel("Location & Node").setEmoji("📍").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`admin_pricing:display:edit_features:${category}`).setLabel("Feature List").setEmoji("✨").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`admin_pricing:display:preview:${category}`).setLabel("Preview Live").setEmoji("👁️").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("admin_pricing:main").setLabel("Back").setEmoji("↩️").setStyle(ButtonStyle.Secondary)

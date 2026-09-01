@@ -50,9 +50,25 @@ export interface IPv4Plan {
   displayOrder: number;
 }
 
+export interface HostingNode {
+  id: string;
+  category: "vps" | "minecraft" | "both";
+  displayName: string;
+  countryCode: string;
+  countryFlag: string;
+  locationName: string;
+  nodeName: string;
+  hostname: string;
+  isActive: boolean;
+  isArchived: boolean;
+  displayOrder: number;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export interface PricingAuditLog {
   id: string;
-  entityType: "plan" | "billing" | "ipv4";
+  entityType: "plan" | "billing" | "ipv4" | "node";
   entityId: string;
   administratorDiscordId: string;
   action: string;
@@ -67,11 +83,6 @@ export interface PricingDisplaySettings {
   title: string;
   subtitle?: string | null;
   description?: string | null;
-  locationName?: string | null;
-  countryCode?: string | null;
-  countryFlag?: string | null;
-  nodeName?: string | null;
-  hostname?: string | null;
   planSectionTitle?: string | null;
   featuresSectionTitle?: string | null;
   features: string[];
@@ -81,14 +92,14 @@ export interface PricingDisplaySettings {
   updatedByDiscordId?: string | null;
 }
 
-export type PricingLocation = "India" | "Singapore" | "Japan";
+export type PricingLocation = string;
 
 /**
- * Executes idempotent database migration for the unified pricing catalog & display settings.
+ * Executes idempotent database migration for catalog, settings, and hosting nodes.
  */
 export async function runCatalogMigration(): Promise<void> {
   try {
-    const files = ["catalogMigration.sql", "displaySettingsMigration.sql"];
+    const files = ["catalogMigration.sql", "displaySettingsMigration.sql", "nodeMigration.sql"];
 
     for (const file of files) {
       const candidate1 = path.join(__dirname, "..", "database", file);
@@ -114,10 +125,10 @@ export async function runCatalogMigration(): Promise<void> {
 }
 
 /**
- * Log administrative pricing changes for auditing
+ * Log administrative pricing & node changes for auditing
  */
 export async function logPricingAudit(
-  entityType: "plan" | "billing" | "ipv4",
+  entityType: "plan" | "billing" | "ipv4" | "node",
   entityId: string,
   administratorDiscordId: string,
   action: string,
@@ -145,6 +156,192 @@ export async function logPricingAudit(
 }
 
 /**
+ * Fetch active database hosting nodes (Single Source of Truth)
+ */
+export async function getHostingNodes(
+  category?: "vps" | "minecraft",
+  includeInactive = false
+): Promise<HostingNode[]> {
+  let categoryFilter = "";
+  const params: any[] = [];
+
+  if (category) {
+    categoryFilter = `AND (LOWER(category) = LOWER($1) OR LOWER(category) = 'both')`;
+    params.push(category);
+  }
+
+  const query = `
+    SELECT
+      id,
+      category,
+      display_name AS "displayName",
+      country_code AS "countryCode",
+      country_flag AS "countryFlag",
+      location_name AS "locationName",
+      node_name AS "nodeName",
+      hostname,
+      is_active AS "isActive",
+      is_archived AS "isArchived",
+      display_order AS "displayOrder",
+      created_at AS "createdAt",
+      updated_at AS "updatedAt"
+    FROM hosting_nodes
+    WHERE is_archived = FALSE
+      ${includeInactive ? "" : "AND is_active = TRUE"}
+      ${categoryFilter}
+    ORDER BY display_order ASC, location_name ASC
+  `;
+
+  const result = await pool.query<HostingNode>(query, params);
+  return result.rows;
+}
+
+export async function getActiveHostingNodes(category?: "vps" | "minecraft"): Promise<HostingNode[]> {
+  return getHostingNodes(category, false);
+}
+
+export async function getHostingNodeById(id: string): Promise<HostingNode | null> {
+  const result = await pool.query<HostingNode>(
+    `
+    SELECT
+      id, category,
+      display_name AS "displayName",
+      country_code AS "countryCode",
+      country_flag AS "countryFlag",
+      location_name AS "locationName",
+      node_name AS "nodeName",
+      hostname,
+      is_active AS "isActive",
+      is_archived AS "isArchived",
+      display_order AS "displayOrder"
+    FROM hosting_nodes
+    WHERE (id::text = $1 OR LOWER(node_name) = LOWER($1) OR LOWER(location_name) = LOWER($1))
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function createHostingNode(
+  input: {
+    category: "vps" | "minecraft" | "both";
+    displayName: string;
+    countryCode: string;
+    countryFlag: string;
+    locationName: string;
+    nodeName: string;
+    hostname: string;
+    displayOrder?: number;
+  },
+  adminDiscordId: string
+): Promise<HostingNode> {
+  const result = await pool.query<HostingNode>(
+    `
+    INSERT INTO hosting_nodes (
+      category, display_name, country_code, country_flag, location_name, node_name, hostname,
+      is_active, is_archived, display_order, created_by_discord_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, FALSE, $8, $9)
+    RETURNING
+      id, category, display_name AS "displayName", country_code AS "countryCode",
+      country_flag AS "countryFlag", location_name AS "locationName", node_name AS "nodeName",
+      hostname, is_active AS "isActive", is_archived AS "isArchived", display_order AS "displayOrder"
+    `,
+    [
+      input.category,
+      input.displayName,
+      input.countryCode,
+      input.countryFlag,
+      input.locationName,
+      input.nodeName,
+      input.hostname,
+      input.displayOrder ?? 1,
+      adminDiscordId,
+    ]
+  );
+
+  const newNode = result.rows[0];
+  await logPricingAudit("node", newNode.id, adminDiscordId, "node_created", null, newNode);
+  return newNode;
+}
+
+export async function updateHostingNode(
+  id: string,
+  input: {
+    displayName?: string;
+    countryCode?: string;
+    countryFlag?: string;
+    locationName?: string;
+    nodeName?: string;
+    hostname?: string;
+    displayOrder?: number;
+  },
+  adminDiscordId: string
+): Promise<HostingNode> {
+  const existing = await getHostingNodeById(id);
+  if (!existing) throw new Error("Hosting node not found.");
+
+  const displayName = input.displayName ?? existing.displayName;
+  const countryCode = input.countryCode ?? existing.countryCode;
+  const countryFlag = input.countryFlag ?? existing.countryFlag;
+  const locationName = input.locationName ?? existing.locationName;
+  const nodeName = input.nodeName ?? existing.nodeName;
+  const hostname = input.hostname ?? existing.hostname;
+  const displayOrder = input.displayOrder ?? existing.displayOrder;
+
+  const result = await pool.query<HostingNode>(
+    `
+    UPDATE hosting_nodes
+    SET display_name = $1, country_code = $2, country_flag = $3, location_name = $4,
+        node_name = $5, hostname = $6, display_order = $7, updated_at = NOW(), updated_by_discord_id = $8
+    WHERE id = $9
+    RETURNING
+      id, category, display_name AS "displayName", country_code AS "countryCode",
+      country_flag AS "countryFlag", location_name AS "locationName", node_name AS "nodeName",
+      hostname, is_active AS "isActive", is_archived AS "isArchived", display_order AS "displayOrder"
+    `,
+    [displayName, countryCode, countryFlag, locationName, nodeName, hostname, displayOrder, adminDiscordId, id]
+  );
+
+  const updatedNode = result.rows[0];
+  await logPricingAudit("node", id, adminDiscordId, "node_updated", existing, updatedNode);
+  return updatedNode;
+}
+
+export async function toggleHostingNodeActive(id: string, adminDiscordId: string): Promise<HostingNode> {
+  const existing = await getHostingNodeById(id);
+  if (!existing) throw new Error("Hosting node not found.");
+
+  const nextState = !existing.isActive;
+  const result = await pool.query<HostingNode>(
+    `UPDATE hosting_nodes SET is_active = $1, updated_at = NOW(), updated_by_discord_id = $2 WHERE id = $3
+     RETURNING id, display_name AS "displayName", is_active AS "isActive"`,
+    [nextState, adminDiscordId, id]
+  );
+
+  const updated = result.rows[0];
+  await logPricingAudit("node", id, adminDiscordId, nextState ? "node_enabled" : "node_disabled", existing, updated);
+  return updated;
+}
+
+export async function archiveHostingNode(id: string, adminDiscordId: string): Promise<HostingNode> {
+  const existing = await getHostingNodeById(id);
+  if (!existing) throw new Error("Hosting node not found.");
+
+  const result = await pool.query<HostingNode>(
+    `UPDATE hosting_nodes SET is_archived = TRUE, is_active = FALSE, updated_at = NOW(), updated_by_discord_id = $1 WHERE id = $2
+     RETURNING id, display_name AS "displayName", is_archived AS "isArchived"`,
+    [adminDiscordId, id]
+  );
+
+  const updated = result.rows[0];
+  await logPricingAudit("node", id, adminDiscordId, "node_archived", existing, updated);
+  return updated;
+}
+
+/**
  * Fetch catalog plans from database
  */
 export async function getPricingPlans(
@@ -153,25 +350,13 @@ export async function getPricingPlans(
 ): Promise<CatalogPlan[]> {
   const query = `
     SELECT
-      id,
-      category,
-      name,
-      description,
-      ram_gb AS "ramGb",
-      vcpu,
-      storage_gb AS "storageGb",
-      memory_mb AS "memoryMb",
-      cpu_percent AS "cpuPercent",
-      price_inr::float AS "priceInr",
-      price_usd::float AS "priceUsd",
-      is_active AS "isActive",
-      is_archived AS "isArchived",
-      display_order AS "displayOrder",
-      created_at AS "createdAt",
-      updated_at AS "updatedAt"
+      id, category, name, description,
+      ram_gb AS "ramGb", vcpu, storage_gb AS "storageGb",
+      memory_mb AS "memoryMb", cpu_percent AS "cpuPercent",
+      price_inr::float AS "priceInr", price_usd::float AS "priceUsd",
+      is_active AS "isActive", is_archived AS "isArchived", display_order AS "displayOrder"
     FROM pricing_plans
-    WHERE LOWER(category) = LOWER($1)
-      AND is_archived = FALSE
+    WHERE LOWER(category) = LOWER($1) AND is_archived = FALSE
       ${includeInactive ? "" : "AND is_active = TRUE"}
     ORDER BY display_order ASC, price_inr ASC
   `;
@@ -188,22 +373,11 @@ export async function getPricingPlanById(id: string): Promise<CatalogPlan | null
   const result = await pool.query<CatalogPlan>(
     `
     SELECT
-      id,
-      category,
-      name,
-      description,
-      ram_gb AS "ramGb",
-      vcpu,
-      storage_gb AS "storageGb",
-      memory_mb AS "memoryMb",
-      cpu_percent AS "cpuPercent",
-      price_inr::float AS "priceInr",
-      price_usd::float AS "priceUsd",
-      is_active AS "isActive",
-      is_archived AS "isArchived",
-      display_order AS "displayOrder",
-      created_at AS "createdAt",
-      updated_at AS "updatedAt"
+      id, category, name, description,
+      ram_gb AS "ramGb", vcpu, storage_gb AS "storageGb",
+      memory_mb AS "memoryMb", cpu_percent AS "cpuPercent",
+      price_inr::float AS "priceInr", price_usd::float AS "priceUsd",
+      is_active AS "isActive", is_archived AS "isArchived", display_order AS "displayOrder"
     FROM pricing_plans
     WHERE (id::text = $1 OR LOWER(name) = LOWER($1))
     LIMIT 1
@@ -219,34 +393,7 @@ export async function getMinecraftPlans(includeInactive = false): Promise<Catalo
 }
 
 export async function getMinecraftPlanById(id: string): Promise<CatalogPlan | null> {
-  const result = await pool.query<CatalogPlan>(
-    `
-    SELECT
-      id,
-      category,
-      name,
-      description,
-      ram_gb AS "ramGb",
-      vcpu,
-      storage_gb AS "storageGb",
-      memory_mb AS "memoryMb",
-      cpu_percent AS "cpuPercent",
-      price_inr::float AS "priceInr",
-      price_usd::float AS "priceUsd",
-      is_active AS "isActive",
-      is_archived AS "isArchived",
-      display_order AS "displayOrder",
-      created_at AS "createdAt",
-      updated_at AS "updatedAt"
-    FROM pricing_plans
-    WHERE category = 'minecraft'
-      AND (id::text = $1 OR LOWER(name) = LOWER($1))
-    LIMIT 1
-    `,
-    [id]
-  );
-
-  return result.rows[0] ?? null;
+  return getPricingPlanById(id);
 }
 
 /**
@@ -256,23 +403,10 @@ export async function getDisplaySettings(category: "vps" | "minecraft"): Promise
   const result = await pool.query<any>(
     `
     SELECT
-      id,
-      category,
-      title,
-      subtitle,
-      description,
-      location_name AS "locationName",
-      country_code AS "countryCode",
-      country_flag AS "countryFlag",
-      node_name AS "nodeName",
-      hostname,
+      id, category, title, subtitle, description,
       plan_section_title AS "planSectionTitle",
       features_section_title AS "featuresSectionTitle",
-      features,
-      footer,
-      purchase_instruction AS "purchaseInstruction",
-      updated_at AS "updatedAt",
-      updated_by_discord_id AS "updatedByDiscordId"
+      features, footer, purchase_instruction AS "purchaseInstruction"
     FROM pricing_display_settings
     WHERE LOWER(category) = LOWER($1)
     LIMIT 1
@@ -286,7 +420,6 @@ export async function getDisplaySettings(category: "vps" | "minecraft"): Promise
     return { ...row, features };
   }
 
-  // Fallback default
   return {
     id: "default",
     category,
@@ -295,10 +428,6 @@ export async function getDisplaySettings(category: "vps" | "minecraft"): Promise
     description: category === "vps"
       ? "Reliable VPS hosting and infrastructure built for developers, businesses and projects."
       : "Instant deployment Paper/Java Minecraft servers powered by high-frequency CPUs.",
-    locationName: category === "vps" ? "India" : "India Node",
-    countryFlag: "🇮🇳",
-    nodeName: "LXC-01",
-    hostname: category === "vps" ? "ssh.mysticservers.com" : "minecraft.mysticservers.com",
     planSectionTitle: category === "vps" ? "VPS PLANS" : "AVAILABLE PLANS",
     featuresSectionTitle: category === "vps" ? "✨ Included With Every VPS" : "✨ Included With Every Server",
     features: category === "vps"
@@ -310,7 +439,7 @@ export async function getDisplaySettings(category: "vps" | "minecraft"): Promise
 }
 
 /**
- * Update Display Settings for Category
+ * Update Display Settings
  */
 export async function updateDisplaySettings(
   category: "vps" | "minecraft",
@@ -318,10 +447,6 @@ export async function updateDisplaySettings(
     title?: string;
     subtitle?: string;
     description?: string;
-    locationName?: string;
-    countryFlag?: string;
-    nodeName?: string;
-    hostname?: string;
     planSectionTitle?: string;
     featuresSectionTitle?: string;
     features?: string[];
@@ -335,10 +460,6 @@ export async function updateDisplaySettings(
   const title = input.title ?? existing.title;
   const subtitle = input.subtitle !== undefined ? input.subtitle : existing.subtitle;
   const description = input.description !== undefined ? input.description : existing.description;
-  const locationName = input.locationName !== undefined ? input.locationName : existing.locationName;
-  const countryFlag = input.countryFlag !== undefined ? input.countryFlag : existing.countryFlag;
-  const nodeName = input.nodeName !== undefined ? input.nodeName : existing.nodeName;
-  const hostname = input.hostname !== undefined ? input.hostname : existing.hostname;
   const planSectionTitle = input.planSectionTitle !== undefined ? input.planSectionTitle : existing.planSectionTitle;
   const featuresSectionTitle = input.featuresSectionTitle !== undefined ? input.featuresSectionTitle : existing.featuresSectionTitle;
   const features = input.features !== undefined ? input.features : existing.features;
@@ -348,19 +469,15 @@ export async function updateDisplaySettings(
   await pool.query(
     `
     INSERT INTO pricing_display_settings (
-      category, title, subtitle, description, location_name, country_flag, node_name, hostname,
+      category, title, subtitle, description,
       plan_section_title, features_section_title, features, footer, purchase_instruction,
       updated_at, updated_by_discord_id
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), $14)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
     ON CONFLICT (category) DO UPDATE SET
       title = EXCLUDED.title,
       subtitle = EXCLUDED.subtitle,
       description = EXCLUDED.description,
-      location_name = EXCLUDED.location_name,
-      country_flag = EXCLUDED.country_flag,
-      node_name = EXCLUDED.node_name,
-      hostname = EXCLUDED.hostname,
       plan_section_title = EXCLUDED.plan_section_title,
       features_section_title = EXCLUDED.features_section_title,
       features = EXCLUDED.features,
@@ -369,22 +486,7 @@ export async function updateDisplaySettings(
       updated_at = NOW(),
       updated_by_discord_id = EXCLUDED.updated_by_discord_id
     `,
-    [
-      category,
-      title,
-      subtitle,
-      description,
-      locationName,
-      countryFlag,
-      nodeName,
-      hostname,
-      planSectionTitle,
-      featuresSectionTitle,
-      JSON.stringify(features),
-      footer,
-      purchaseInstruction,
-      adminDiscordId,
-    ]
+    [category, title, subtitle, description, planSectionTitle, featuresSectionTitle, JSON.stringify(features), footer, purchaseInstruction, adminDiscordId]
   );
 
   const updated = await getDisplaySettings(category);
@@ -469,9 +571,7 @@ export async function updateCatalogPlan(
   adminDiscordId: string
 ): Promise<CatalogPlan> {
   const existing = await getPricingPlanById(id);
-  if (!existing) {
-    throw new Error(`Plan with ID ${id} not found.`);
-  }
+  if (!existing) throw new Error(`Plan with ID ${id} not found.`);
 
   const name = input.name ?? existing.name;
   const description = input.description !== undefined ? input.description : existing.description;
@@ -506,9 +606,6 @@ export async function updateCatalogPlan(
   return updatedPlan;
 }
 
-/**
- * Admin: Toggle plan active state
- */
 export async function togglePlanActive(id: string, adminDiscordId: string): Promise<CatalogPlan> {
   const existing = await getPricingPlanById(id);
   if (!existing) throw new Error("Plan not found.");
@@ -525,9 +622,6 @@ export async function togglePlanActive(id: string, adminDiscordId: string): Prom
   return updated;
 }
 
-/**
- * Admin: Archive plan
- */
 export async function archivePlan(id: string, adminDiscordId: string): Promise<CatalogPlan> {
   const existing = await getPricingPlanById(id);
   if (!existing) throw new Error("Plan not found.");
@@ -543,9 +637,6 @@ export async function archivePlan(id: string, adminDiscordId: string): Promise<C
   return updated;
 }
 
-/**
- * Fetch billing options for category
- */
 export async function getBillingOptions(
   category: "vps" | "minecraft" = "vps",
   includeInactive = false
@@ -569,9 +660,6 @@ export async function getBillingOptions(
   return result.rows;
 }
 
-/**
- * Update billing option discount
- */
 export async function updateBillingOption(
   id: string,
   discountPercent: number,
@@ -595,18 +683,12 @@ export async function updateBillingOption(
   return updated;
 }
 
-/**
- * Fetch IPv4 pricing plans
- */
 export async function getIPv4Plans(includeInactive = false): Promise<IPv4Plan[]> {
   const result = await pool.query<IPv4Plan>(
     `
     SELECT
-      id,
-      duration_months AS "durationMonths",
-      price_inr::float AS "priceInr",
-      is_active AS "isActive",
-      display_order AS "displayOrder"
+      id, duration_months AS "durationMonths", price_inr::float AS "priceInr",
+      is_active AS "isActive", display_order AS "displayOrder"
     FROM pricing_ipv4
     ${includeInactive ? "" : "WHERE is_active = TRUE"}
     ORDER BY display_order ASC, duration_months ASC
@@ -616,9 +698,6 @@ export async function getIPv4Plans(includeInactive = false): Promise<IPv4Plan[]>
   return result.rows;
 }
 
-/**
- * Deterministic price calculation service function
- */
 export async function calculatePrice(
   planId: string,
   billingMonths: number,
@@ -656,21 +735,13 @@ export async function calculatePrice(
   };
 }
 
-/**
- * Fetch audit logs for staff inspection
- */
 export async function getPricingAuditLogs(limit = 10): Promise<PricingAuditLog[]> {
   const result = await pool.query<PricingAuditLog>(
     `
     SELECT
-      id,
-      entity_type AS "entityType",
-      entity_id AS "entityId",
-      administrator_discord_id AS "administratorDiscordId",
-      action,
-      old_values AS "oldValues",
-      new_values AS "newValues",
-      created_at AS "createdAt"
+      id, entity_type AS "entityType", entity_id AS "entityId",
+      administrator_discord_id AS "administratorDiscordId", action,
+      old_values AS "oldValues", new_values AS "newValues", created_at AS "createdAt"
     FROM pricing_audit_logs
     ORDER BY created_at DESC
     LIMIT $1
@@ -681,24 +752,25 @@ export async function getPricingAuditLogs(limit = 10): Promise<PricingAuditLog[]
   return result.rows;
 }
 
-// Helper for location flag emojis
-function locationEmoji(location: PricingLocation): string {
-  if (location === "India") return "🇮🇳";
-  if (location === "Singapore") return "🇸🇬";
-  return "🇯🇵";
-}
-
 /**
  * CENTRAL RENDERER: VPS Public Pricing Panel
+ * Node selector derived 100% dynamically from hosting_nodes in PostgreSQL!
  */
-export async function renderVpsPricingPanel(location: PricingLocation = "India") {
+export async function renderVpsPricingPanel(selectedNodeId?: string) {
   const plans = await getActivePlans("vps");
   const settings = await getDisplaySettings("vps");
+  const nodes = await getActiveHostingNodes("vps");
+
+  if (nodes.length === 0) {
+    throw new Error("No active hosting nodes found in database.");
+  }
+
+  const selectedNode = (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null) || nodes[0];
 
   const title = settings.title || "🌐 MysticServers VPS Pricing";
   const subtitle = settings.subtitle ? `**${settings.subtitle}**\n\n` : "";
   const desc = settings.description ? `${settings.description}\n\n` : "";
-  const locLine = `📍 **Location:** ${locationEmoji(location)} ${location}\n\n`;
+  const locLine = `📍 **Location:** ${selectedNode.countryFlag} ${selectedNode.locationName} (${selectedNode.nodeName})\n🌐 **Gateway Host:** \`${selectedNode.hostname}\`\n\n`;
   const planTitle = settings.planSectionTitle ? `**${settings.planSectionTitle}**\n\n` : "";
 
   const planLines = plans.map(
@@ -722,63 +794,65 @@ export async function renderVpsPricingPanel(location: PricingLocation = "India")
     .setColor(0x5865f2)
     .setTitle(title)
     .setDescription(descriptionContent)
-    .setFooter({ text: settings.footer || "MysticServers • Only you can see this" });
+    .setFooter({ text: settings.footer || "MysticServers • VPS Hosting" });
 
-  const options = plans.map((p) =>
+  const planOptions = plans.map((p) =>
     new StringSelectMenuOptionBuilder()
       .setLabel(`${p.name} • ₹${p.priceInr} / $${p.priceUsd}`)
       .setDescription(`${p.ramGb}GB RAM • ${p.storageGb}GB Disk • ${p.vcpu} vCore`)
       .setEmoji("🖥️")
-      .setValue(`pricing:plan:${location}:${p.id}`)
+      .setValue(`pricing:plan:${selectedNode.id}:${p.id}`)
   );
 
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`pricing:plan:${location}`)
+  const planSelect = new StringSelectMenuBuilder()
+    .setCustomId(`pricing:plan:${selectedNode.id}`)
     .setPlaceholder("Select a VPS plan")
-    .addOptions(options);
+    .addOptions(planOptions);
 
-  const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+  const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(planSelect);
 
-  const locationRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("pricing:location:India")
-      .setLabel("India")
-      .setEmoji("🇮🇳")
-      .setStyle(location === "India" ? ButtonStyle.Primary : ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("pricing:location:Singapore")
-      .setLabel("Singapore")
-      .setEmoji("🇸🇬")
-      .setStyle(location === "Singapore" ? ButtonStyle.Primary : ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("pricing:location:Japan")
-      .setLabel("Japan")
-      .setEmoji("🇯🇵")
-      .setStyle(location === "Japan" ? ButtonStyle.Primary : ButtonStyle.Secondary)
+  // Dynamic database-backed node selector row
+  const nodeOptions = nodes.map((n) =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(`${n.countryFlag} ${n.displayName}`)
+      .setDescription(`Location: ${n.locationName} • Node: ${n.nodeName}`)
+      .setValue(`pricing:node:select:${n.id}`)
+      .setDefault(n.id === selectedNode.id)
   );
+
+  const nodeSelect = new StringSelectMenuBuilder()
+    .setCustomId("pricing:node:select")
+    .setPlaceholder("📍 Select Hosting Location / Node")
+    .addOptions(nodeOptions);
+
+  const nodeRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(nodeSelect);
 
   return {
     embeds: [embed],
-    components: [selectRow, locationRow],
+    components: [selectRow, nodeRow],
+    selectedNode,
   };
 }
 
 /**
  * CENTRAL RENDERER: Minecraft Public Pricing Panel
+ * Node selector derived 100% dynamically from hosting_nodes in PostgreSQL!
  */
-export async function renderMinecraftPricingPanel() {
+export async function renderMinecraftPricingPanel(selectedNodeId?: string) {
   const plans = await getActivePlans("minecraft");
   const settings = await getDisplaySettings("minecraft");
+  const nodes = await getActiveHostingNodes("minecraft");
+
+  if (nodes.length === 0) {
+    throw new Error("No active hosting nodes found in database.");
+  }
+
+  const selectedNode = (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null) || nodes[0];
 
   const title = settings.title || "🎮 MysticServers — Minecraft Hosting";
   const subtitle = settings.subtitle ? `**${settings.subtitle}**\n\n` : "";
   const desc = settings.description ? `${settings.description}\n\n` : "";
-  const locFlag = settings.countryFlag || "🇮🇳";
-  const locName = settings.locationName || "India Node";
-  const nodeName = settings.nodeName || "LXC-01";
-  const hostname = settings.hostname || "minecraft.mysticservers.com";
-
-  const locLine = `📍 **Location:** ${locFlag} ${locName} ${nodeName}\n🌐 **Hostname:** \`${hostname}\`\n\n`;
+  const locLine = `📍 **Location:** ${selectedNode.countryFlag} ${selectedNode.locationName} (${selectedNode.nodeName})\n🌐 **Hostname:** \`${selectedNode.hostname}\`\n\n`;
   const planTitle = settings.planSectionTitle ? `**${settings.planSectionTitle}**\n\n` : "";
 
   const planLines = plans.map(
@@ -804,24 +878,41 @@ export async function renderMinecraftPricingPanel() {
     .setDescription(descriptionContent)
     .setFooter({ text: settings.footer || "MysticServers • Minecraft Hosting" });
 
-  const options = plans.map((p) =>
+  const planOptions = plans.map((p) =>
     new StringSelectMenuOptionBuilder()
       .setLabel(`${p.name} • ₹${p.priceInr}/mo ($${p.priceUsd})`)
       .setDescription(`${p.ramGb}GB RAM • ${p.cpuPercent ?? (p.vcpu * 100)}% CPU • ${p.storageGb}GB Disk`)
       .setEmoji("🎮")
-      .setValue(`minecraft:plan:${p.id}`)
+      .setValue(`minecraft:plan:${selectedNode.id}:${p.id}`)
   );
 
-  const select = new StringSelectMenuBuilder()
-    .setCustomId("minecraft:plan:select")
+  const planSelect = new StringSelectMenuBuilder()
+    .setCustomId(`minecraft:plan:${selectedNode.id}`)
     .setPlaceholder("Select a Minecraft plan")
-    .addOptions(options);
+    .addOptions(planOptions);
 
-  const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+  const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(planSelect);
+
+  // Dynamic database-backed node selector row
+  const nodeOptions = nodes.map((n) =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(`${n.countryFlag} ${n.displayName}`)
+      .setDescription(`Location: ${n.locationName} • Node: ${n.nodeName}`)
+      .setValue(`minecraft:node:select:${n.id}`)
+      .setDefault(n.id === selectedNode.id)
+  );
+
+  const nodeSelect = new StringSelectMenuBuilder()
+    .setCustomId("minecraft:node:select")
+    .setPlaceholder("📍 Select Hosting Location / Node")
+    .addOptions(nodeOptions);
+
+  const nodeRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(nodeSelect);
 
   return {
     embeds: [embed],
-    components: [selectRow],
+    components: [selectRow, nodeRow],
+    selectedNode,
   };
 }
 
@@ -836,7 +927,7 @@ export async function refreshPricingChannel(client: Client): Promise<void> {
     const channel = await client.channels.fetch(channelId).catch(() => null);
     if (!channel || !(channel instanceof TextChannel)) return;
 
-    const vpsPanel = await renderVpsPricingPanel("India");
+    const vpsPanel = await renderVpsPricingPanel();
     const messages = await channel.messages.fetch({ limit: 10 }).catch(() => null);
     const existingMsg = messages?.find((m) => m.author.id === client.user?.id);
 
