@@ -51,13 +51,20 @@ export function getReferralRewardPlanName(): string {
  */
 export async function runReferralMigration(): Promise<void> {
   try {
-    const migrationPath = path.join(__dirname, "..", "database", "referrals.sql");
-    if (fs.existsSync(migrationPath)) {
+    const pathCandidate1 = path.join(__dirname, "..", "database", "referrals.sql");
+    const pathCandidate2 = path.join(process.cwd(), "src", "database", "referrals.sql");
+    const migrationPath = fs.existsSync(pathCandidate1)
+      ? pathCandidate1
+      : fs.existsSync(pathCandidate2)
+      ? pathCandidate2
+      : null;
+
+    if (migrationPath) {
       const sql = fs.readFileSync(migrationPath, "utf-8");
       await pool.query(sql);
       console.log("✅ Referral database migration applied successfully.");
     } else {
-      console.warn(`[Referral System] Migration file not found at ${migrationPath}`);
+      console.warn(`[Referral System] Migration file not found at ${pathCandidate1} or ${pathCandidate2}`);
     }
   } catch (err) {
     console.error("❌ Failed to run referral database migration:", err);
