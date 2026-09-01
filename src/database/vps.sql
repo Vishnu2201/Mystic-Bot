@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS vps_instances (
     vps_number BIGSERIAL UNIQUE NOT NULL,
 
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
-    ticket_id UUID NOT NULL UNIQUE REFERENCES tickets(id) ON DELETE RESTRICT,
+    ticket_id UUID UNIQUE REFERENCES tickets(id) ON DELETE RESTRICT,
     plan_id UUID REFERENCES pricing_plans(id) ON DELETE SET NULL,
 
     plan_name VARCHAR(100) NOT NULL,

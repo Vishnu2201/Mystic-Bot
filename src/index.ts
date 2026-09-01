@@ -11,11 +11,16 @@ import { handleGuildMemberAdd } from "./events/guildMemberAdd";
 import { handleMessageCreate } from "./events/messageCreate";
 import { handleInteraction } from "./events/interactionCreate";
 import { runVpsLifecycleCheck } from "./services/vpsLifecycle";
+import { startPublicSshGatewayReconciler } from "./services/publicSshGatewayReconciler";
 
 import { ticketCommand } from "./commands/ticket";
 import { pricingCommand } from "./commands/pricing";
 import { vpsCommand } from "./commands/vps";
+import { vpsCreateCommand } from "./commands/vpsCreate";
 import { modCommand } from "./commands/mod";
+import { minecraftCommand } from "./commands/minecraft";
+import { minecraftCreateCommand } from "./commands/minecraftCreate";
+import { vpsDeleteCommand } from "./commands/vpsDelete";
 
 function requireEnv(
   name: string
@@ -67,7 +72,11 @@ async function registerCommands(): Promise<void> {
         ticketCommand.toJSON(),
         pricingCommand.toJSON(),
         vpsCommand.toJSON(),
+        vpsCreateCommand.toJSON(),
+        vpsDeleteCommand.toJSON(),
         modCommand.toJSON(),
+        minecraftCommand.toJSON(),
+        minecraftCreateCommand.toJSON(),
       ],
     }
   );
@@ -96,6 +105,9 @@ client.once(
         error
       );
     }
+
+    // Start Public SSH Gateway reconciler service
+    startPublicSshGatewayReconciler();
 
     // Run VPS expiry/renewal lifecycle checks once at startup.
     await runVpsLifecycleCheck(client);

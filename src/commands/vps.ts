@@ -2,7 +2,11 @@ import { SlashCommandBuilder } from "discord.js";
 
 export const vpsCommand = new SlashCommandBuilder()
   .setName("vps")
-  .setDescription("Staff VPS lifecycle management")
+  .setDescription("View and manage your VPS instances")
+  .addSubcommand((subcommand) => subcommand.setName("status").setDescription("View your VPS instances"))
+  .addSubcommand((subcommand) => subcommand.setName("info").setDescription("View detailed VPS information").addIntegerOption((option) => option.setName("number").setDescription("Your VPS number").setMinValue(1)))
+  .addSubcommand((subcommand) => subcommand.setName("terminal").setDescription("Open a private VPS terminal session").addIntegerOption((option) => option.setName("number").setDescription("Your VPS number when you have multiple").setMinValue(1)))
+  .addSubcommand((subcommand) => subcommand.setName("terminal-diagnose").setDescription("Diagnose a VPS terminal relay").addIntegerOption((option) => option.setName("number").setDescription("VPS number").setRequired(true).setMinValue(1)))
   .addSubcommand((subcommand) =>
     subcommand
       .setName("dashboard")

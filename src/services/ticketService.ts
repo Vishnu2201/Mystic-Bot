@@ -45,11 +45,25 @@ export interface TicketVPSDetails {
   cpuModels: string[];
 }
 
+export interface TicketMinecraftDetails {
+  planId: string;
+  planName: string;
+  billingMonths?: number;
+  monthlyPriceInr?: number;
+  monthlyPriceUsd?: number;
+  priceInr: number;
+  priceUsd: number;
+  ramGb: number;
+  cpuPercent: number;
+  storageGb: number;
+}
+
 export async function createTicket(
   guild: Guild,
   member: GuildMember,
   department: string,
-  vpsDetails?: TicketVPSDetails
+  vpsDetails?: TicketVPSDetails,
+  minecraftDetails?: TicketMinecraftDetails
 ): Promise<TextChannel> {
   if (!ticketCategoryId) {
     throw new Error(
@@ -66,11 +80,13 @@ export async function createTicket(
   // ----------------------------------------------------------
   // Check existing ticket
   // ----------------------------------------------------------
+  // Fetch channels first so this does not depend on an incomplete cache.
+  await guild.channels.fetch();
 
   const existingTicket =
     guild.channels.cache.find(
       (channel) =>
-        channel.type === ChannelType.GuildText &&
+        channel?.type === ChannelType.GuildText &&
         channel.parentId === ticketCategoryId &&
         channel.topic?.includes(
           `ticket-owner:${member.id}`
@@ -81,9 +97,7 @@ export async function createTicket(
     existingTicket &&
     existingTicket.type === ChannelType.GuildText
   ) {
-    throw new Error(
-      `You already have an open ticket: ${existingTicket}`
-    );
+    return existingTicket;
   }
 
   // ----------------------------------------------------------
@@ -260,6 +274,18 @@ export async function createTicket(
                 vpsDetails.cpuModels,
             }
           : {}),
+        ...(minecraftDetails
+          ? {
+              planId: minecraftDetails.planId,
+              planName: minecraftDetails.planName,
+              priceInr: minecraftDetails.priceInr,
+              priceUsd: minecraftDetails.priceUsd,
+              ramGb: minecraftDetails.ramGb,
+              cpuPercent: minecraftDetails.cpuPercent,
+              storageGb: minecraftDetails.storageGb,
+              serviceType: "minecraft",
+            }
+          : {}),
       }
     );
 
@@ -286,6 +312,16 @@ export async function createTicket(
                   .setCustomId("vps:provision")
                   .setLabel("Provision VPS")
                   .setEmoji("🖥️")
+                  .setStyle(ButtonStyle.Success),
+              ]
+            : []),
+
+          ...(minecraftDetails
+            ? [
+                new ButtonBuilder()
+                  .setCustomId("minecraft:provision")
+                  .setLabel("Provision Minecraft Server")
+                  .setEmoji("🎮")
                   .setStyle(ButtonStyle.Success),
               ]
             : []),
@@ -364,6 +400,36 @@ export async function createTicket(
           .join("\n") +
 
         `\n\n━━━━━━━━━━━━━━━━━━━━\n\n` +
+
+        "A member of our Sales Team will assist you shortly.";
+    }
+
+    if (minecraftDetails) {
+      const duration = (minecraftDetails as any).billingMonths || 1;
+      const monthlyInr = (minecraftDetails as any).monthlyPriceInr || Math.round(minecraftDetails.priceInr / duration);
+      const monthlyUsd = (minecraftDetails as any).monthlyPriceUsd || Math.round(minecraftDetails.priceUsd / duration);
+
+      description =
+        `Welcome ${member}!\n\n` +
+        `**Department:** ${department}\n` +
+        `**Ticket:** #${ticketNumber}\n` +
+        `**Status:** 🟢 Open\n\n` +
+
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `🎮 **MINECRAFT SERVER CONFIGURATION**\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n\n` +
+
+        `📦 **Plan:** ${minecraftDetails.planName}\n` +
+        `🗓️ **Duration:** ${duration} month${duration === 1 ? "" : "s"}\n` +
+        `💳 **Monthly Price:** ₹${monthlyInr} / $${monthlyUsd}\n` +
+        `💰 **Total Price:** ₹${minecraftDetails.priceInr} / $${minecraftDetails.priceUsd}\n\n` +
+
+        `🧠 **RAM:** ${minecraftDetails.ramGb} GB\n` +
+        `⚡ **CPU:** ${minecraftDetails.cpuPercent}%\n` +
+        `💾 **Disk:** ${minecraftDetails.storageGb} GB\n` +
+        `🌐 **Hostname:** minecraft.mysticservers.com\n\n` +
+
+        `━━━━━━━━━━━━━━━━━━━━\n\n` +
 
         "A member of our Sales Team will assist you shortly.";
     }

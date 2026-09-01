@@ -1,0 +1,12 @@
+MYSTIC BOT – TICKET FLOW FIX
+
+Changes:
+- Pricing ticket button now uses a private deferred reply instead of deferUpdate().
+- Existing ticket detection fetches guild channels before checking.
+- If an existing ticket is found, it is returned instead of throwing a generic error.
+- The misleading generic 'You may already have an open ticket' message was removed.
+
+Excluded intentionally:
+- .env
+- node_modules
+- .git
