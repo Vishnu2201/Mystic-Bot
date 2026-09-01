@@ -117,7 +117,7 @@ ON CONFLICT (name) DO UPDATE SET
 -- 4. Create pricing_audit_logs table
 CREATE TABLE IF NOT EXISTS pricing_audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    entity_type VARCHAR(30) NOT NULL CHECK (entity_type IN ('plan', 'billing', 'ipv4')),
+    entity_type VARCHAR(30) NOT NULL CHECK (entity_type IN ('plan', 'billing', 'ipv4', 'node', 'display')),
     entity_id VARCHAR(255) NOT NULL,
     administrator_discord_id VARCHAR(32) NOT NULL,
     action VARCHAR(50) NOT NULL,

@@ -99,7 +99,12 @@ export type PricingLocation = string;
  */
 export async function runCatalogMigration(): Promise<void> {
   try {
-    const files = ["catalogMigration.sql", "displaySettingsMigration.sql", "nodeMigration.sql"];
+    const files = [
+      "catalogMigration.sql",
+      "displaySettingsMigration.sql",
+      "nodeMigration.sql",
+      "pricingAuditFix.sql",
+    ];
 
     for (const file of files) {
       const candidate1 = path.join(__dirname, "..", "database", file);
@@ -128,7 +133,7 @@ export async function runCatalogMigration(): Promise<void> {
  * Log administrative pricing & node changes for auditing
  */
 export async function logPricingAudit(
-  entityType: "plan" | "billing" | "ipv4" | "node",
+  entityType: "plan" | "billing" | "ipv4" | "node" | "display",
   entityId: string,
   administratorDiscordId: string,
   action: string,
