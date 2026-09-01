@@ -115,6 +115,7 @@ import {
   buildPlanModal,
   renderBillingAdminDashboard,
   renderAuditHistoryDashboard,
+  renderAdminDisplaySettingsDashboard,
 } from "../handlers/pricingAdminHandler";
 
 import {
@@ -125,6 +126,10 @@ import {
   getBillingOptions,
   updateBillingOption,
   refreshPricingChannel,
+  getDisplaySettings,
+  updateDisplaySettings,
+  renderVpsPricingPanel,
+  renderMinecraftPricingPanel,
 } from "../services/pricingService";
 
 import {
@@ -491,6 +496,106 @@ async function handleAdminPricingInteraction(interaction: Interaction): Promise<
       return;
     }
 
+    if (id === "admin_pricing:category:display_select") {
+      const embed = new EmbedBuilder()
+        .setColor(0xf1c40f)
+        .setTitle("📝 Select Product Presentation Category")
+        .setDescription("Choose which product category presentation text you want to manage or preview:");
+
+      const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId("admin_pricing:display:category:vps").setLabel("VPS Display").setEmoji("🖥️").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("admin_pricing:display:category:minecraft").setLabel("Minecraft Display").setEmoji("🎮").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("admin_pricing:main").setLabel("Back").setStyle(ButtonStyle.Secondary)
+      );
+
+      await interaction.update({ embeds: [embed], components: [buttons] });
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:display:category:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const db = await renderAdminDisplaySettingsDashboard(category);
+      await interaction.update({ embeds: db.embeds, components: db.components });
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:display:edit_text:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const settings = await getDisplaySettings(category);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`admin_pricing:modal:display_text:${category}`)
+        .setTitle(`Edit ${category.toUpperCase()} Text & Titles`);
+
+      const titleInput = new TextInputBuilder().setCustomId("title").setLabel("Public Title").setStyle(TextInputStyle.Short).setValue(settings.title).setRequired(true);
+      const subtitleInput = new TextInputBuilder().setCustomId("subtitle").setLabel("Subtitle").setStyle(TextInputStyle.Short).setValue(settings.subtitle ?? "").setRequired(false);
+      const descInput = new TextInputBuilder().setCustomId("description").setLabel("Description").setStyle(TextInputStyle.Paragraph).setValue(settings.description ?? "").setRequired(false);
+      const footerInput = new TextInputBuilder().setCustomId("footer").setLabel("Footer Text").setStyle(TextInputStyle.Short).setValue(settings.footer ?? "").setRequired(false);
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(titleInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(subtitleInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(descInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(footerInput)
+      );
+
+      await interaction.showModal(modal);
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:display:edit_location:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const settings = await getDisplaySettings(category);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`admin_pricing:modal:display_location:${category}`)
+        .setTitle(`Edit ${category.toUpperCase()} Location & Node`);
+
+      const locInput = new TextInputBuilder().setCustomId("location_name").setLabel("Location Name").setStyle(TextInputStyle.Short).setValue(settings.locationName ?? "").setRequired(false);
+      const flagInput = new TextInputBuilder().setCustomId("country_flag").setLabel("Country Flag Emoji").setStyle(TextInputStyle.Short).setValue(settings.countryFlag ?? "").setRequired(false);
+      const nodeInput = new TextInputBuilder().setCustomId("node_name").setLabel("Node Display Name").setStyle(TextInputStyle.Short).setValue(settings.nodeName ?? "").setRequired(false);
+      const hostInput = new TextInputBuilder().setCustomId("hostname").setLabel("Public Hostname").setStyle(TextInputStyle.Short).setValue(settings.hostname ?? "").setRequired(false);
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(locInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(flagInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(nodeInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(hostInput)
+      );
+
+      await interaction.showModal(modal);
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:display:edit_features:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const settings = await getDisplaySettings(category);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`admin_pricing:modal:display_features:${category}`)
+        .setTitle(`Edit ${category.toUpperCase()} Feature List`);
+
+      const featInput = new TextInputBuilder()
+        .setCustomId("features")
+        .setLabel("Included Features (One per line)")
+        .setStyle(TextInputStyle.Paragraph)
+        .setValue(settings.features.join("\n"))
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(featInput));
+      await interaction.showModal(modal);
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:display:preview:")) {
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      await interaction.deferReply({ flags: 64 });
+
+      const panel = category === "vps" ? await renderVpsPricingPanel("India") : await renderMinecraftPricingPanel();
+      await interaction.editReply({ embeds: panel.embeds, components: panel.components });
+      return;
+    }
+
     if (id.startsWith("admin_pricing:category:")) {
       const category = id.split(":")[2] as "vps" | "minecraft" | "ipv4" | "billing" | "history";
       if (category === "vps" || category === "minecraft") {
@@ -607,6 +712,46 @@ async function handleAdminPricingInteraction(interaction: Interaction): Promise<
   // 3. Modal Submissions
   if (interaction.isModalSubmit() && interaction.customId.startsWith("admin_pricing:modal:")) {
     const id = interaction.customId;
+
+    if (id.startsWith("admin_pricing:modal:display_text:")) {
+      await interaction.deferReply({ flags: 64 });
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const title = interaction.fields.getTextInputValue("title").trim();
+      const subtitle = interaction.fields.getTextInputValue("subtitle")?.trim() || undefined;
+      const description = interaction.fields.getTextInputValue("description")?.trim() || undefined;
+      const footer = interaction.fields.getTextInputValue("footer")?.trim() || undefined;
+
+      await updateDisplaySettings(category, { title, subtitle, description, footer }, interaction.user.id);
+      await refreshPricingChannel(interaction.client);
+      await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** display titles and text.` });
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:modal:display_location:")) {
+      await interaction.deferReply({ flags: 64 });
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const locationName = interaction.fields.getTextInputValue("location_name")?.trim() || undefined;
+      const countryFlag = interaction.fields.getTextInputValue("country_flag")?.trim() || undefined;
+      const nodeName = interaction.fields.getTextInputValue("node_name")?.trim() || undefined;
+      const hostname = interaction.fields.getTextInputValue("hostname")?.trim() || undefined;
+
+      await updateDisplaySettings(category, { locationName, countryFlag, nodeName, hostname }, interaction.user.id);
+      await refreshPricingChannel(interaction.client);
+      await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** location and node details.` });
+      return;
+    }
+
+    if (id.startsWith("admin_pricing:modal:display_features:")) {
+      await interaction.deferReply({ flags: 64 });
+      const category = id.split(":")[3] as "vps" | "minecraft";
+      const raw = interaction.fields.getTextInputValue("features");
+      const features = raw.split("\n").map((s) => s.trim()).filter(Boolean);
+
+      await updateDisplaySettings(category, { features }, interaction.user.id);
+      await refreshPricingChannel(interaction.client);
+      await interaction.editReply({ content: `✅ Updated **${category.toUpperCase()}** feature list (${features.length} items).` });
+      return;
+    }
 
     if (id.startsWith("admin_pricing:modal:add:")) {
       await interaction.deferReply({ flags: 64 });

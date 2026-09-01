@@ -2,7 +2,6 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChatInputCommandInteraction,
   EmbedBuilder,
   ModalBuilder,
   StringSelectMenuBuilder,
@@ -24,11 +23,14 @@ import {
   updateBillingOption,
   getIPv4Plans,
   getPricingAuditLogs,
-  refreshPricingChannel,
+  getDisplaySettings,
+  updateDisplaySettings,
+  renderVpsPricingPanel,
+  renderMinecraftPricingPanel,
 } from "../services/pricingService";
 
 /**
- * Verifies that the user interacting with admin pricing has Administrator permissions or Support role.
+ * Verifies that the user interacting with admin pricing has Administrator permissions.
  */
 export function checkAdminAuth(interaction: Interaction): boolean {
   if (!interaction.guild || !interaction.member) return false;
@@ -36,10 +38,7 @@ export function checkAdminAuth(interaction: Interaction): boolean {
   if (!member) return false;
 
   const isAdministrator = member.permissions.has(PermissionFlagsBits.Administrator);
-  const supportRoleId = process.env.SUPPORT_ROLE_ID?.trim();
-  const isSupport = supportRoleId ? member.roles.cache.has(supportRoleId) : false;
-
-  return isAdministrator || isSupport;
+  return isAdministrator;
 }
 
 /**
@@ -53,10 +52,10 @@ export async function renderAdminPricingMainDashboard() {
     .setColor(0x3498db)
     .setTitle("⚙️ MYSTIC SERVERS — PRICING CATALOG CONTROL PANEL")
     .setDescription(
-      "Welcome Administrator! Select a product category below to manage live pricing, plan specifications, discounts, and availability.\n\n" +
+      "Welcome Administrator! Select a product category below to manage live pricing, plan specifications, presentation text, and availability.\n\n" +
         `🖥️ **VPS Catalog:** ${vpsPlans.length} plans (${vpsPlans.filter((p) => p.isActive).length} active)\n` +
         `🎮 **Minecraft Catalog:** ${mcPlans.length} plans (${mcPlans.filter((p) => p.isActive).length} active)\n` +
-        "🌐 **IPv4 Add-ons:** Custom multi-month billing\n" +
+        "📝 **Display Settings:** Fully editable titles, subtitles, locations & features\n" +
         "🗓️ **Billing Discounts:** 1m, 3m, 6m, 12m rules\n\n" +
         "Select an option below to proceed."
     )
@@ -66,7 +65,7 @@ export async function renderAdminPricingMainDashboard() {
   const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId("admin_pricing:category:vps").setLabel("VPS Plans").setEmoji("🖥️").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("admin_pricing:category:minecraft").setLabel("Minecraft Plans").setEmoji("🎮").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("admin_pricing:category:ipv4").setLabel("IPv4 Plans").setEmoji("🌐").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("admin_pricing:category:display_select").setLabel("Display Settings").setEmoji("📝").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("admin_pricing:category:billing").setLabel("Billing Discounts").setEmoji("🗓️").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("admin_pricing:category:history").setLabel("Audit History").setEmoji("📜").setStyle(ButtonStyle.Secondary)
   );
@@ -99,7 +98,7 @@ export async function renderCategoryDashboard(category: "vps" | "minecraft") {
         "━━━━━━━━━━━━━━━━━━━━\n\n" +
         lines.join("\n")
     )
-    .setFooter({ text: "Changes apply immediately to new orders." })
+    .setFooter({ text: "Changes apply immediately to public displays." })
     .setTimestamp();
 
   const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -107,6 +106,41 @@ export async function renderCategoryDashboard(category: "vps" | "minecraft") {
     new ButtonBuilder().setCustomId(`admin_pricing:plan:edit_select:${category}`).setLabel("Edit Plan").setEmoji("✏️").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`admin_pricing:plan:toggle_select:${category}`).setLabel("Enable/Disable").setEmoji("🔄").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`admin_pricing:plan:archive_select:${category}`).setLabel("Archive Plan").setEmoji("📂").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("admin_pricing:main").setLabel("Back").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
+  );
+
+  return { embeds: [embed], components: [actionRow] };
+}
+
+/**
+ * Display Settings Management Dashboard per Category
+ */
+export async function renderAdminDisplaySettingsDashboard(category: "vps" | "minecraft") {
+  const settings = await getDisplaySettings(category);
+  const isVps = category === "vps";
+
+  const embed = new EmbedBuilder()
+    .setColor(0xf1c40f)
+    .setTitle(`📝 Presentation Settings — ${isVps ? "🖥️ VPS Hosting" : "🎮 Minecraft Hosting"}`)
+    .setDescription(
+      `Configure the public presentation text for **${category.toUpperCase()}** pricing messages.\n\n` +
+        "━━━━━━━━━━━━━━━━━━━━\n\n" +
+        `📌 **Title:** \`${settings.title}\`\n` +
+        `🏷️ **Subtitle:** \`${settings.subtitle ?? "None"}\`\n` +
+        `📍 **Location / Flag:** \`${settings.countryFlag ?? "🇮🇳"}\` \`${settings.locationName ?? "India"}\`\n` +
+        `🖥️ **Node / Hostname:** \`${settings.nodeName ?? "LXC-01"}\` • \`${settings.hostname ?? "mysticservers.com"}\`\n` +
+        `✨ **Features Count:** ${settings.features.length} item(s)\n` +
+        `📜 **Footer:** \`${settings.footer ?? "None"}\`\n\n` +
+        "Select an option below to edit presentation fields or preview live rendering."
+    )
+    .setFooter({ text: "MysticServers Presentation Control Panel" })
+    .setTimestamp();
+
+  const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`admin_pricing:display:edit_text:${category}`).setLabel("Text & Titles").setEmoji("✏️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`admin_pricing:display:edit_location:${category}`).setLabel("Location & Node").setEmoji("📍").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`admin_pricing:display:edit_features:${category}`).setLabel("Feature List").setEmoji("✨").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`admin_pricing:display:preview:${category}`).setLabel("Preview Live").setEmoji("👁️").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("admin_pricing:main").setLabel("Back").setEmoji("↩️").setStyle(ButtonStyle.Secondary)
   );
 

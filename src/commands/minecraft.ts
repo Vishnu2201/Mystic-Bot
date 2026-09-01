@@ -9,6 +9,7 @@ import {
 } from "discord.js";
 
 import { getMinecraftPlans, getMinecraftPlanById } from "../config/minecraftPlans";
+import { renderMinecraftPricingPanel } from "../services/pricingService";
 
 export const minecraftCommand = new SlashCommandBuilder()
   .setName("minecraft")
@@ -29,56 +30,7 @@ export const minecraftCommand = new SlashCommandBuilder()
   );
 
 export async function createMinecraftPricingPanel() {
-  const plans = await getMinecraftPlans();
-
-  const embed = new EmbedBuilder()
-    .setColor(0x57f287)
-    .setTitle("🎮 MysticServers — Minecraft Hosting")
-    .setDescription(
-      "**HIGH PERFORMANCE MINECRAFT HOSTING**\n\n" +
-        "Instant deployment Paper/Java Minecraft servers powered by high-frequency CPUs.\n\n" +
-        "📍 **Location:** 🇮🇳 India Node LXC-01\n" +
-        "🌐 **Hostname:** `minecraft.mysticservers.com`\n\n" +
-        "━━━━━━━━━━━━━━━━━━━━\n\n" +
-        "**AVAILABLE PLANS**\n\n" +
-        plans
-          .map(
-            (plan) =>
-              `**${plan.name}** — **₹${plan.priceInr} / $${plan.priceUsd} per month**\n` +
-              `🧠 ${plan.ramGb} GB RAM • ⚡ ${plan.cpuPercent}% CPU • 💾 ${plan.storageGb} GB Disk\n`
-          )
-          .join("\n") +
-        "\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-        "✨ **Included With Every Server**\n\n" +
-        "⚡ Paper / Java 25 Ready\n" +
-        "🚀 Instant Automatic Provisioning\n" +
-        "🎛️ Full Pterodactyl Panel Control\n" +
-        "💬 24/7 Discord Support\n\n" +
-        "Select a plan below to create a purchase ticket."
-    )
-    .setFooter({
-      text: "MysticServers • Minecraft Hosting",
-    });
-
-  const options = plans.map((plan) =>
-    new StringSelectMenuOptionBuilder()
-      .setLabel(`${plan.name} • ₹${plan.priceInr}/mo ($${plan.priceUsd})`)
-      .setDescription(`${plan.ramGb}GB RAM • ${plan.cpuPercent}% CPU • ${plan.storageGb}GB Disk`)
-      .setEmoji("🎮")
-      .setValue(`minecraft:plan:${plan.id}`)
-  );
-
-  const select = new StringSelectMenuBuilder()
-    .setCustomId("minecraft:plan:select")
-    .setPlaceholder("Select a Minecraft plan")
-    .addOptions(options);
-
-  const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
-
-  return {
-    embeds: [embed],
-    components: [selectRow],
-  };
+  return renderMinecraftPricingPanel();
 }
 
 export async function createMinecraftPlanDetails(planId: string, billingMonths: number = 1) {
