@@ -270,29 +270,16 @@ export class IncusProvider implements VpsProvider {
       created = true;
 
       // 2. Override root disk device from profile at instance level to set storage size without duplicate devices
-      await this.runProvisionStage("storage limit configuration", async () => {
-        const overrideResult = await this.ssh.runArguments("incus", [
+      await this.runProvisionStage("storage limit configuration", () =>
+        this.ssh.runArgumentsChecked("incus", [
           "config",
           "device",
           "override",
           containerName,
           "root",
-          "size",
-          `${request.resources.storageGb}GiB`,
-        ]);
-
-        if (overrideResult.exitCode !== 0) {
-          await this.ssh.runArgumentsChecked("incus", [
-            "config",
-            "device",
-            "set",
-            containerName,
-            "root",
-            "size",
-            `${request.resources.storageGb}GiB`,
-          ]);
-        }
-      });
+          `size=${request.resources.storageGb}GiB`,
+        ])
+      );
 
       // 3. Inject root password & configure OpenSSH server inside container
       if (request.initialPassword) {
