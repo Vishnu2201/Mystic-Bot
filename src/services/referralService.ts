@@ -12,10 +12,8 @@ import {
 } from "./vpsDatabase";
 import { provisionAutomaticVps, generateSecureInitialPassword } from "./vpsProvisioningService";
 import { allocateAndBuildCustomerInstanceName } from "./vpsNamingService";
-import { PublicSshGatewayProvider } from "../providers/publicSshGatewayProvider";
+import { createPublicSshGatewayProvider } from "./publicSshGatewayReconciler";
 import { refreshVpsManagementDashboard } from "./vpsLifecycle";
-
-const gatewayProvider = new PublicSshGatewayProvider();
 
 // In-memory invite cache: Map<guildId, Map<inviteCode, uses>>
 const inviteCache = new Map<string, Map<string, number>>();
@@ -473,6 +471,7 @@ export async function claimReferralReward(
     const pubPort = provisionedVps.publicSshPort;
     const privIp = provisionedVps.privateIpv4 ?? staticPrivateIpv4;
     if (pubPort && privIp) {
+      const gatewayProvider = createPublicSshGatewayProvider();
       await gatewayProvider.ensureMapping(pubPort, privIp, 22);
     }
 

@@ -1,8 +1,4 @@
-import { execFile } from "node:child_process";
-import net from "node:net";
-import util from "node:util";
-
-const execFileAsync = util.promisify(execFile);
+import { SshClient } from "./sshClient";
 
 export type PublicSshStatus =
   | "unverified"
@@ -43,7 +39,34 @@ export interface GatewayHealthResult {
   message: string;
 }
 
+function ipToLong(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let num = 0;
+  for (const part of parts) {
+    const n = parseInt(part, 10);
+    if (isNaN(n) || n < 0 || n > 255 || String(n) !== part) return null;
+    num = (num << 8) + n;
+  }
+  return num >>> 0;
+}
+
+function isIpInSubnet(ip: string, subnetCidr: string): boolean {
+  const [subnetIp, maskBitsStr] = subnetCidr.split("/");
+  const maskBits = maskBitsStr ? parseInt(maskBitsStr, 10) : 24;
+
+  const ipNum = ipToLong(ip);
+  const subnetNum = ipToLong(subnetIp);
+
+  if (ipNum === null || subnetNum === null) return false;
+  if (isNaN(maskBits) || maskBits < 0 || maskBits > 32) return false;
+
+  const mask = maskBits === 0 ? 0 : (~0 << (32 - maskBits)) >>> 0;
+  return (ipNum & mask) === (subnetNum & mask);
+}
+
 export class PublicSshGatewayProvider {
+  private readonly ssh: SshClient;
   public readonly defaultPublicHost: string;
   public readonly defaultTargetPort: number;
   public readonly portStart: number;
@@ -55,7 +78,8 @@ export class PublicSshGatewayProvider {
   public readonly fwdChain = "MYSTIC-VPS-SSH-FWD";
   public readonly masqChain = "MYSTIC-VPS-SSH-MASQ";
 
-  constructor() {
+  public constructor(ssh: SshClient) {
+    this.ssh = ssh;
     this.defaultPublicHost =
       process.env.PUBLIC_SSH_HOST?.trim() || "ssh.mysticservers.com";
     this.defaultTargetPort = Number(
@@ -77,14 +101,23 @@ export class PublicSshGatewayProvider {
     args: string[]
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     try {
-      const { stdout, stderr } = await execFileAsync("iptables", args);
-      return { stdout: stdout.toString(), stderr: stderr.toString(), exitCode: 0 };
+      return await this.ssh.runArguments(
+        "sudo",
+        ["-n", "/usr/local/sbin/mystic-vps-gateway", ...args]
+      );
     } catch (err: any) {
-      const stdout = err.stdout ? err.stdout.toString() : "";
-      const stderr = err.stderr ? err.stderr.toString() : err.message || "";
-      const exitCode = typeof err.code === "number" ? err.code : 1;
-      return { stdout, stderr, exitCode };
+      return {
+        stdout: "",
+        stderr: err.message || "Remote execution error",
+        exitCode: 1,
+      };
     }
+  }
+
+  public isTargetIpValid(targetHost: string): boolean {
+    if (!targetHost) return false;
+    const cleanHost = targetHost.split("/")[0].trim();
+    return isIpInSubnet(cleanHost, this.masqueradeSubnet);
   }
 
   public async initChains(): Promise<boolean> {
@@ -225,8 +258,6 @@ export class PublicSshGatewayProvider {
     const lines = res.stdout.split("\n");
 
     for (const line of lines) {
-      // Matches lines like:
-      // 1     0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:22002 to:10.0.3.210:22
       const match = line.match(
         /^(\d+)\s+.*tcp\s+dpt:(\d+)\s+to:([0-9.]+):(\d+)/i
       );
@@ -257,8 +288,10 @@ export class PublicSshGatewayProvider {
       throw new Error(`Invalid public SSH port: ${publicPort}`);
     }
 
-    if (!/^10\.0\.3\.\d+$/.test(targetHost)) {
-      throw new Error(`Invalid target IPv4 address for VPS: ${targetHostInput}`);
+    if (!this.isTargetIpValid(targetHost)) {
+      throw new Error(
+        `Invalid target IPv4 address for VPS: ${targetHostInput}. Must be within subnet ${this.masqueradeSubnet}.`
+      );
     }
 
     await this.initChains();
@@ -271,11 +304,9 @@ export class PublicSshGatewayProvider {
         existing.targetHost === targetHost &&
         existing.targetPort === targetPort
       ) {
-        // Mapping is already present and correct
         return true;
       }
 
-      // Remove stale mapping for this publicPort
       await this.removeMapping(publicPort);
     }
 
@@ -347,7 +378,7 @@ export class PublicSshGatewayProvider {
     const matches = actual.filter((m) => m.publicPort === publicPort);
 
     if (matches.length === 0) {
-      return true; // Idempotent remove
+      return true;
     }
 
     for (const match of matches) {
@@ -393,52 +424,54 @@ export class PublicSshGatewayProvider {
     timeoutMs = 2500
   ): Promise<GatewayVerificationResult> {
     const targetHost = targetHostInput ? targetHostInput.split("/")[0].trim() : "";
-    return new Promise((resolve) => {
-      const socket = new net.Socket();
-      let hasResolved = false;
 
-      const timer = setTimeout(() => {
-        if (!hasResolved) {
-          hasResolved = true;
-          socket.destroy();
-          resolve({
-            verified: false,
-            status: "configured",
-            message: `Target VPS SSH ${targetHost}:${targetPort} TCP connection timed out.`,
-          });
-        }
-      }, timeoutMs);
+    if (!this.isTargetIpValid(targetHost)) {
+      return {
+        verified: false,
+        status: "configured",
+        message: `Target IP ${targetHost} is outside allowed subnet ${this.masqueradeSubnet}.`,
+      };
+    }
 
-      socket.connect(targetPort, targetHost, () => {
-        if (!hasResolved) {
-          hasResolved = true;
-          clearTimeout(timer);
-          socket.destroy();
-          resolve({
-            verified: true,
-            status: "verified",
-            message: `Target VPS SSH ${targetHost}:${targetPort} verified reachable via TCP socket.`,
-            lastVerifiedAt: new Date(),
-          });
-        }
-      });
+    const timeoutSec = Math.max(1, Math.ceil(timeoutMs / 1000));
+    const testCommand = `timeout ${timeoutSec} bash -c 'cat < /dev/null > /dev/tcp/${targetHost}/${targetPort}' 2>/dev/null || nc -z -w ${timeoutSec} ${targetHost} ${targetPort} 2>/dev/null`;
 
-      socket.on("error", (err) => {
-        if (!hasResolved) {
-          hasResolved = true;
-          clearTimeout(timer);
-          socket.destroy();
-          resolve({
-            verified: false,
-            status: "configured",
-            message: `Target VPS SSH ${targetHost}:${targetPort} unreachable (${err.message}).`,
-          });
-        }
-      });
-    });
+    try {
+      const result = await this.ssh.run(testCommand, { timeoutMs: timeoutMs + 2000 });
+      if (result.exitCode === 0) {
+        return {
+          verified: true,
+          status: "verified",
+          message: `Target VPS SSH ${targetHost}:${targetPort} verified reachable via TCP on host.`,
+          lastVerifiedAt: new Date(),
+        };
+      } else {
+        return {
+          verified: false,
+          status: "configured",
+          message: `Target VPS SSH ${targetHost}:${targetPort} TCP connection timed out or refused on host.`,
+        };
+      }
+    } catch (err: any) {
+      return {
+        verified: false,
+        status: "configured",
+        message: `Target VPS SSH ${targetHost}:${targetPort} connectivity check failed: ${err.message}`,
+      };
+    }
   }
 
   public async checkGatewayHealth(): Promise<GatewayHealthResult> {
+    if (!this.enabled) {
+      return {
+        iptablesAvailable: false,
+        chainsExist: false,
+        isForwardingEnabled: false,
+        activeRulesCount: 0,
+        message: "Public SSH gateway is disabled.",
+      };
+    }
+
     const testIptables = await this.runIptables(["-L", "-n"]);
     const iptablesAvailable = testIptables.exitCode === 0;
 
@@ -448,7 +481,7 @@ export class PublicSshGatewayProvider {
         chainsExist: false,
         isForwardingEnabled: false,
         activeRulesCount: 0,
-        message: "iptables command is not available or lacks permissions on this host.",
+        message: `iptables helper is not available via sudo on remote host (${testIptables.stderr.trim() || "exit code " + testIptables.exitCode}).`,
       };
     }
 
@@ -459,7 +492,7 @@ export class PublicSshGatewayProvider {
       chainsExist: true,
       isForwardingEnabled: true,
       activeRulesCount: mappings.length,
-      message: `iptables active with ${mappings.length} DNAT rule(s) in ${this.natChain}.`,
+      message: `iptables active on remote host with ${mappings.length} DNAT rule(s) in ${this.natChain}.`,
     };
   }
 }

@@ -69,45 +69,25 @@ function numberEnvironment(
   return value;
 }
 
+export function createVpsNodeSshClient(): SshClient {
+  const host = requiredEnvironment("VPS_NODE_HOST");
+  const username = requiredEnvironment("VPS_NODE_SSH_USER");
+  const privateKeyPath = requiredEnvironment("VPS_NODE_SSH_KEY_PATH");
+  const port = numberEnvironment("VPS_NODE_SSH_PORT", 22);
+
+  const resolvedKeyPath = path.resolve(privateKeyPath);
+
+  return new SshClient({
+    host,
+    port,
+    username,
+    privateKeyPath: resolvedKeyPath,
+    readyTimeoutMs: 20_000,
+  });
+}
+
 export function createVpsNodeProvider(): VpsProvider {
-  const host =
-    requiredEnvironment(
-      "VPS_NODE_HOST"
-    );
-
-  const username =
-    requiredEnvironment(
-      "VPS_NODE_SSH_USER"
-    );
-
-  const privateKeyPath =
-    requiredEnvironment(
-      "VPS_NODE_SSH_KEY_PATH"
-    );
-
-  const port =
-    numberEnvironment(
-      "VPS_NODE_SSH_PORT",
-      22
-    );
-
-  const resolvedKeyPath =
-    path.resolve(
-      privateKeyPath
-    );
-
-  const ssh =
-    new SshClient({
-      host,
-      port,
-      username,
-      privateKeyPath:
-        resolvedKeyPath,
-
-      readyTimeoutMs:
-        20_000,
-    });
-
+  const ssh = createVpsNodeSshClient();
   const providerType = (process.env.VPS_PROVIDER_TYPE?.trim() || "incus").toLowerCase();
 
   if (providerType === "lxc") {

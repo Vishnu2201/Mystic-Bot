@@ -1,11 +1,16 @@
 import { PublicSshGatewayProvider } from "../providers/publicSshGatewayProvider";
+import { createVpsNodeSshClient } from "./vpsNodeService";
 import {
   listVpsInstances,
   updateVpsProvisioningDetails,
   VpsInstanceRecord,
 } from "./vpsDatabase";
 
-const gatewayProvider = new PublicSshGatewayProvider();
+export function createPublicSshGatewayProvider(): PublicSshGatewayProvider {
+  const ssh = createVpsNodeSshClient();
+  return new PublicSshGatewayProvider(ssh);
+}
+
 let isReconciling = false;
 let reconcilerTimer: NodeJS.Timeout | null = null;
 
@@ -28,6 +33,8 @@ export async function reconcilePublicSshGateway(): Promise<ReconciliationSummary
   let addedOrUpdated = 0;
   let staleRemoved = 0;
   let errors = 0;
+
+  const gatewayProvider = createPublicSshGatewayProvider();
 
   try {
     const allVps = await listVpsInstances();
@@ -181,6 +188,7 @@ export async function getGatewayDiagnostics(vpsNumber?: number): Promise<{
   mappings: any[];
   vpsDiagnostic?: any;
 }> {
+  const gatewayProvider = createPublicSshGatewayProvider();
   const health = await gatewayProvider.checkGatewayHealth();
   const mappings = await gatewayProvider.listActualMappings();
 
