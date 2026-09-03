@@ -88,3 +88,16 @@ export type HostCapacity = {
 
   existingContainerCount: number;
 };
+
+export interface VpsProvider {
+  getContainerName(vpsNumber: number): string;
+  getHostCapacity(): Promise<HostCapacity>;
+  containerExists(containerName: string): Promise<boolean>;
+  getContainerInfo(containerName: string): Promise<LxcContainerInfo>;
+  provision(request: LxcProvisionRequest): Promise<LxcProvisionResult>;
+  start(containerName: string): Promise<LxcContainerInfo>;
+  stop(containerName: string): Promise<LxcContainerInfo>;
+  restart(containerName: string): Promise<LxcContainerInfo>;
+  destroy(containerName: string): Promise<void>;
+  runInContainer(containerName: string, command: string, timeoutMs?: number): Promise<string>;
+}

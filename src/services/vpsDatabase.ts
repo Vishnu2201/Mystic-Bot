@@ -142,15 +142,16 @@ export async function allocatePrivateIpv4(
   );
 
   const usedIps = new Set(result.rows.map((r) => r.privateIpv4));
+  const subnetPrefix = process.env.VPS_PRIVATE_SUBNET_PREFIX?.trim() || "10.170.92";
 
   for (let hostNum = 10; hostNum <= 250; hostNum++) {
-    const candidateIp = `10.0.3.${hostNum}`;
+    const candidateIp = `${subnetPrefix}.${hostNum}`;
     if (!usedIps.has(candidateIp)) {
       return candidateIp;
     }
   }
 
-  throw new Error("No available private IPv4 addresses in subnet 10.0.3.0/24 (range 10.0.3.10 - 10.0.3.250).");
+  throw new Error(`No available private IPv4 addresses in subnet ${subnetPrefix}.0/24 (range ${subnetPrefix}.10 - ${subnetPrefix}.250).`);
 }
 
 export async function allocatePublicSshPort(

@@ -48,6 +48,7 @@ export class PublicSshGatewayProvider {
   public readonly defaultTargetPort: number;
   public readonly portStart: number;
   public readonly portEnd: number;
+  public readonly masqueradeSubnet: string;
   public readonly enabled: boolean;
 
   public readonly natChain = "MYSTIC-VPS-SSH";
@@ -66,6 +67,8 @@ export class PublicSshGatewayProvider {
     this.portEnd = Number(
       process.env.PUBLIC_SSH_PORT_END?.trim() || "22100"
     );
+    this.masqueradeSubnet =
+      process.env.PUBLIC_SSH_MASQUERADE_SUBNET?.trim() || "10.170.92.0/24";
     this.enabled =
       (process.env.PUBLIC_SSH_GATEWAY_ENABLED?.trim() ?? "true") === "true";
   }
@@ -161,14 +164,14 @@ export class PublicSshGatewayProvider {
         ]);
       }
 
-      // Ensure MASQUERADE for 10.0.3.0/24 inside masqChain
+      // Ensure MASQUERADE for configured subnet inside masqChain
       const checkMasqRule = await this.runIptables([
         "-t",
         "nat",
         "-C",
         this.masqChain,
         "-d",
-        "10.0.3.0/24",
+        this.masqueradeSubnet,
         "-p",
         "tcp",
         "--dport",
@@ -184,7 +187,7 @@ export class PublicSshGatewayProvider {
           "-A",
           this.masqChain,
           "-d",
-          "10.0.3.0/24",
+          this.masqueradeSubnet,
           "-p",
           "tcp",
           "--dport",

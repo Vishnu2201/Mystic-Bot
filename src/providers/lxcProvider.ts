@@ -4,6 +4,7 @@ import {
   LxcContainerState,
   LxcProvisionRequest,
   LxcProvisionResult,
+  VpsProvider,
 } from "./types";
 
 import {
@@ -131,7 +132,7 @@ function parseKeyValueOutput(
   return values;
 }
 
-export class LxcProvider {
+export class LxcProvider implements VpsProvider {
   private readonly ssh: SshClient;
 
   public constructor(

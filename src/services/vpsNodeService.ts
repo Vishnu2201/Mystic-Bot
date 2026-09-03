@@ -5,6 +5,10 @@ import {
 } from "../providers/lxcProvider";
 
 import {
+  IncusProvider,
+} from "../providers/incusProvider";
+
+import {
   SshClient,
 } from "../providers/sshClient";
 
@@ -13,6 +17,7 @@ import {
   LxcContainerInfo,
   LxcProvisionRequest,
   LxcProvisionResult,
+  VpsProvider,
 } from "../providers/types";
 
 function requiredEnvironment(
@@ -64,7 +69,7 @@ function numberEnvironment(
   return value;
 }
 
-export function createVpsNodeProvider(): LxcProvider {
+export function createVpsNodeProvider(): VpsProvider {
   const host =
     requiredEnvironment(
       "VPS_NODE_HOST"
@@ -103,9 +108,13 @@ export function createVpsNodeProvider(): LxcProvider {
         20_000,
     });
 
-  return new LxcProvider(
-    ssh
-  );
+  const providerType = (process.env.VPS_PROVIDER_TYPE?.trim() || "incus").toLowerCase();
+
+  if (providerType === "lxc") {
+    return new LxcProvider(ssh);
+  }
+
+  return new IncusProvider(ssh);
 }
 
 export async function getVpsNodeCapacity(): Promise<HostCapacity> {

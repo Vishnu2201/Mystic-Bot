@@ -1506,7 +1506,7 @@ async function handleCustomerVpsCommand(
             name: "🔒 Private Network",
             value:
               `🔒 **Persistent Private IPv4:** \`${vps.privateIpv4 ?? "Not assigned"}\`\n` +
-              `📡 **Subnet:** 10.0.3.0/24 (Gateway: 10.0.3.1)`,
+              `📡 **Subnet:** ${vps.privateIpv4 ? `${vps.privateIpv4.split('.').slice(0, 3).join('.')}.0/24` : "Private Network"}`,
             inline: false,
           },
           {
@@ -1658,7 +1658,7 @@ async function handleVpsCreateCommand(interaction: ChatInputCommandInteraction, 
           name: "🔒 Private Network",
           value:
             `🔒 **Private IPv4:** \`${result.privateIpv4 ?? "Not assigned"}\`\n` +
-            `📡 **Internal Access:** Tailscale Subnet Router (10.0.3.0/24)`,
+            `📡 **Internal Access:** Subnet ${result.privateIpv4 ? `${result.privateIpv4.split('.').slice(0, 3).join('.')}.0/24` : "Private Network"}`,
           inline: false,
         }
       )
@@ -2618,7 +2618,7 @@ async function handleAutomaticVpsModal(
             name: "🔒 Private Network",
             value:
               `🔒 **Private IPv4:** \`${result.privateIpv4 ?? "Not assigned"}\`\n` +
-              `📡 **Internal Access:** Tailscale Subnet Router (10.0.3.0/24)`,
+              `📡 **Internal Access:** Subnet ${result.privateIpv4 ? `${result.privateIpv4.split('.').slice(0, 3).join('.')}.0/24` : "Private Network"}`,
             inline: false,
           }
         )
