@@ -21,6 +21,7 @@ export class SshClient {
     command: string,
     options?: {
       timeoutMs?: number;
+      pty?: boolean;
     }
   ): Promise<RemoteCommandResult> {
     const privateKey = await readFile(
@@ -68,8 +69,10 @@ export class SshClient {
 
         client
           .on("ready", () => {
+            const execOptions = options?.pty ? { pty: true } : {};
             client.exec(
               command,
+              execOptions,
               (error, stream) => {
                 if (error) {
                   clearTimeout(timeout);
@@ -90,13 +93,16 @@ export class SshClient {
                     (chunk: Buffer) => {
                       stdout += chunk.toString();
                     }
-                  )
-                  .stderr.on(
+                  );
+
+                if (stream.stderr) {
+                  stream.stderr.on(
                     "data",
                     (chunk: Buffer) => {
                       stderr += chunk.toString();
                     }
                   );
+                }
 
                 stream.on(
                   "close",
@@ -156,6 +162,7 @@ export class SshClient {
     command: string,
     options?: {
       timeoutMs?: number;
+      pty?: boolean;
     }
   ): Promise<RemoteCommandResult> {
     const result =
@@ -191,6 +198,7 @@ export class SshClient {
     argumentsList: string[],
     options?: {
       timeoutMs?: number;
+      pty?: boolean;
     }
   ): Promise<RemoteCommandResult> {
     const command = [
@@ -211,6 +219,7 @@ export class SshClient {
     argumentsList: string[],
     options?: {
       timeoutMs?: number;
+      pty?: boolean;
     }
   ): Promise<RemoteCommandResult> {
     const command = [

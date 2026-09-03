@@ -263,7 +263,7 @@ export class IncusProvider implements VpsProvider {
             "-c",
             `limits.processes=${this.processLimit}`,
           ],
-          { timeoutMs: 10 * 60 * 1000 }
+          { timeoutMs: 10 * 60 * 1000, pty: true }
         )
       );
 
